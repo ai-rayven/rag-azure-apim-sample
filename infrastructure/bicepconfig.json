@@ -1,0 +1,27 @@
+{
+  // Bicep linter + analyzer config for this sample. Kept next to main.bicep so every contributor and
+  // CI lint the SAME way (`make lint`). We turn the core rules up to `error` (default is `warning`,
+  // which is easy to ignore) so a bad edit fails fast instead of shipping.
+  "analyzers": {
+    "core": {
+      "enabled": true,
+      "verbose": false,
+      "rules": {
+        // Dead params are the most common drift when trimming infra (e.g. the provider-key removal) —
+        // make them fatal so we can't leave one behind.
+        "no-unused-params": { "level": "error" },
+        "no-unused-vars": { "level": "error" },
+        // Keyless posture guardrails: no baked-in cloud URLs, no secure param with a plaintext default.
+        "no-hardcoded-env-urls": { "level": "error" },
+        "secure-parameter-default": { "level": "error" },
+        "secure-params-in-nested-deploy": { "level": "error" },
+        "outputs-should-not-contain-secrets": { "level": "error" },
+        // Style: keep the code uniform so diffs are about intent, not formatting.
+        "prefer-interpolation": { "level": "error" },
+        "prefer-unquoted-property-names": { "level": "error" },
+        "simplify-interpolation": { "level": "error" },
+        "use-recent-api-versions": { "level": "off" }
+      }
+    }
+  }
+}

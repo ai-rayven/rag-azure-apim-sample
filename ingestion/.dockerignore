@@ -1,0 +1,6 @@
+.venv
+__pycache__/
+*.pyc
+.tiktoken
+.pytest_cache
+*.egg-info
