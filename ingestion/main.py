@@ -1,10 +1,7 @@
 from __future__ import annotations
 from azure.core.exceptions import ResourceNotFoundError
 from azure.identity import DefaultAzureCredential
-from azure.monitor.opentelemetry import configure_azure_monitor
 from azure.storage.queue import QueueClient
-from opentelemetry import trace
-from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
 
 from config import settings
 from domain import IndexRecord, ParsedDoc, Source, SourceDoc, content_hash
@@ -13,17 +10,10 @@ from services.embeddings import Embedder
 from services.index import SearchIndex
 from services.source import BlobSource
 from services.state import IngestionStateStore
+from telemetry import setup_telemetry
 
 
-def setup_observability() -> trace.Tracer:
-    """Configure Azure Monitor export and httpx tracing, and return the Job's tracer."""
-    if settings.applicationinsights_connection_string:
-        configure_azure_monitor(connection_string=settings.applicationinsights_connection_string)
-    HTTPXClientInstrumentor().instrument()
-    return trace.get_tracer("ingestion")
-
-
-tracer = setup_observability()
+tracer = setup_telemetry("ingestion")
 
 
 def drain() -> int:

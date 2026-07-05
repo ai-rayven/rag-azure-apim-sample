@@ -1,0 +1,173 @@
+{
+  "version": "Notebook/1.0",
+  "$schema": "https://github.com/Microsoft/Application-Insights-Workbooks/blob/master/schema/workbook.json",
+  "items": [
+    {
+      "type": 1,
+      "name": "title",
+      "content": {
+        "json": "## RAG-over-APIM — Observability\nSingle pane over the central Log Analytics workspace: read-path health, token/cost, RAG-stage latency, backend & ingestion failures, and a change feed to correlate spikes with deploys.\n\n_KQL assumes OTel span attributes land under the `Properties` column of `App*` tables — verify column/role mapping against live telemetry on first deploy and tweak if needed._"
+      }
+    },
+    {
+      "type": 9,
+      "name": "params-time",
+      "content": {
+        "version": "KqlParameterItem/1.0",
+        "style": "pills",
+        "queryType": 0,
+        "parameters": [
+          {
+            "id": "p-timerange",
+            "version": "KqlParameterItem/1.0",
+            "name": "TimeRange",
+            "label": "Time range",
+            "type": 4,
+            "isRequired": true,
+            "value": { "durationMs": 86400000 },
+            "typeSettings": {
+              "selectableValues": [
+                { "durationMs": 3600000 },
+                { "durationMs": 14400000 },
+                { "durationMs": 86400000 },
+                { "durationMs": 604800000 }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "type": 1,
+      "name": "hdr-health",
+      "content": { "json": "### Health & traffic" }
+    },
+    {
+      "type": 3,
+      "name": "q-request-volume",
+      "content": {
+        "version": "KqlItem/1.0",
+        "title": "Chat requests & failures over time",
+        "query": "AppRequests\n| where Name has \"/chat\"\n| summarize Requests = count(), Failures = countif(Success == false) by bin(TimeGenerated, 5m)\n| order by TimeGenerated asc",
+        "size": 0,
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "visualization": "timechart",
+        "timeContextFromParameter": "TimeRange"
+      }
+    },
+    {
+      "type": 3,
+      "name": "q-tokens",
+      "content": {
+        "version": "KqlItem/1.0",
+        "title": "Token usage by model (cost proxy)",
+        "query": "AppDependencies\n| where Name == \"llm-call\"\n| extend model = tostring(Properties[\"gen_ai.request.model\"]),\n         inTok = toint(Properties[\"gen_ai.usage.input_tokens\"]),\n         outTok = toint(Properties[\"gen_ai.usage.output_tokens\"])\n| summarize Tokens = sum(inTok + outTok) by bin(TimeGenerated, 15m), model\n| order by TimeGenerated asc",
+        "size": 0,
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "visualization": "timechart",
+        "timeContextFromParameter": "TimeRange"
+      }
+    },
+    {
+      "type": 3,
+      "name": "q-rag-latency",
+      "content": {
+        "version": "KqlItem/1.0",
+        "title": "RAG stage latency (retrieve vs llm-call)",
+        "query": "AppDependencies\n| where Name in (\"retrieve\", \"llm-call\")\n| summarize p50 = percentile(DurationMs, 50), p95 = percentile(DurationMs, 95) by Name",
+        "size": 0,
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "visualization": "barchart",
+        "timeContextFromParameter": "TimeRange"
+      }
+    },
+    {
+      "type": 1,
+      "name": "hdr-errors",
+      "content": { "json": "### Backend failures" }
+    },
+    {
+      "type": 3,
+      "name": "q-apim-codes",
+      "content": {
+        "version": "KqlItem/1.0",
+        "title": "Gateway responses by code (surfaces 429 throttling)",
+        "query": "AppRequests\n| where Name has \"chat\" or Name has \"embeddings\"\n| summarize Count = count() by ResultCode, AppRoleName\n| order by Count desc",
+        "size": 0,
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "visualization": "table",
+        "timeContextFromParameter": "TimeRange"
+      }
+    },
+    {
+      "type": 3,
+      "name": "q-failed-deps",
+      "content": {
+        "version": "KqlItem/1.0",
+        "title": "Failed read-path calls (pivot via OperationId → transaction)",
+        "query": "AppDependencies\n| where Name in (\"llm-call\", \"retrieve\") and Success == false\n| project TimeGenerated, Name, ResultCode, DurationMs, OperationId\n| order by TimeGenerated desc\n| take 100",
+        "size": 0,
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "visualization": "table",
+        "timeContextFromParameter": "TimeRange"
+      }
+    },
+    {
+      "type": 1,
+      "name": "hdr-ingestion",
+      "content": { "json": "### Ingestion health\n_Note: a crash before the first `ingest-doc` span won't appear here — the change feed's `jobs/start` entry confirms the run was at least attempted._" }
+    },
+    {
+      "type": 3,
+      "name": "q-ingest-throughput",
+      "content": {
+        "version": "KqlItem/1.0",
+        "title": "Documents ingested vs failed",
+        "query": "AppDependencies\n| where Name == \"ingest-doc\"\n| summarize Ingested = countif(Success == true), Failed = countif(Success == false) by bin(TimeGenerated, 1h)\n| order by TimeGenerated asc",
+        "size": 0,
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "visualization": "barchart",
+        "timeContextFromParameter": "TimeRange"
+      }
+    },
+    {
+      "type": 3,
+      "name": "q-ingest-failures",
+      "content": {
+        "version": "KqlItem/1.0",
+        "title": "Failed documents by id",
+        "query": "AppDependencies\n| where Name == \"ingest-doc\" and Success == false\n| extend docId = tostring(Properties[\"doc.id\"])\n| project TimeGenerated, docId, ResultCode, OperationId\n| order by TimeGenerated desc\n| take 100",
+        "size": 0,
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "visualization": "table",
+        "timeContextFromParameter": "TimeRange"
+      }
+    },
+    {
+      "type": 1,
+      "name": "hdr-changes",
+      "content": { "json": "### Change feed — correlate spikes with deploys/restarts" }
+    },
+    {
+      "type": 3,
+      "name": "q-change-feed",
+      "content": {
+        "version": "KqlItem/1.0",
+        "title": "Control-plane changes (deploys, revision writes, job starts)",
+        "query": "AzureActivity\n| where CategoryValue == \"Administrative\"\n| where OperationNameValue has_any (\"deployments/write\", \"containerApps/write\", \"jobs/start/action\", \"restart\")\n| where ActivityStatusValue in (\"Success\", \"Succeeded\", \"Accepted\", \"Started\")\n| project TimeGenerated, OperationNameValue, ActivityStatusValue, Caller, ResourceGroup, _ResourceId\n| order by TimeGenerated desc\n| take 100",
+        "size": 0,
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "visualization": "table",
+        "timeContextFromParameter": "TimeRange"
+      }
+    }
+  ]
+}

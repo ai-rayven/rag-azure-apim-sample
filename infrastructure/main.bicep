@@ -192,6 +192,36 @@ module apimApp 'modules/apim-app.bicep' = {
 }
 
 // ============================================================================
+// observability (consumers) — placed last: these READ the telemetry the tiers above emit.
+//   • Activity Log -> workspace is subscription-scoped, so it can only be declared here at the root
+//     (an RG-scoped module cannot host it). It puts deploy / revision-write / job-start events into
+//     the AzureActivity table so the workbook can correlate error spikes with changes.
+//   • workbook is the single-pane dashboard over the central workspace (its own module).
+// ============================================================================
+resource activityLog 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = {
+  name: 'activity-to-workspace'
+  properties: {
+    workspaceId: monitoring.outputs.workspaceId
+    logs: [
+      // Administrative is the only category we need: it covers every control-plane write — ARM
+      // deployments (make deploy/release), container-app revision writes, job starts, restarts.
+      // (There is no separate 'Deployment' category at subscription scope.)
+      { category: 'Administrative', enabled: true }
+    ]
+  }
+}
+
+module workbook 'modules/workbook.bicep' = {
+  scope: rgMonitoring
+  name: 'workbook'
+  params: {
+    location: location
+    tags: tags
+    workspaceId: monitoring.outputs.workspaceId
+  }
+}
+
+// ============================================================================
 // Outputs — endpoints and names only. No secret is ever emitted (rule 5). APP_URL is now the APIM
 // gateway root: users hit the gateway, which proxies to the app.
 // ============================================================================
@@ -214,3 +244,4 @@ output APP_INSIGHTS_NAME string = app.outputs.appInsightsName
 output GATEWAY_APP_INSIGHTS_NAME string = networking.outputs.appInsightsName
 output MONITORING_RESOURCE_GROUP string = monitoringRgName
 output LOG_ANALYTICS_NAME string = monitoring.outputs.workspaceName
+output WORKBOOK_ID string = workbook.outputs.workbookId // `make workbook` builds a portal link from this

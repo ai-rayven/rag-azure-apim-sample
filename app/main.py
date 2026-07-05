@@ -1,26 +1,17 @@
 import uuid
 from contextlib import asynccontextmanager
-from azure.monitor.opentelemetry import configure_azure_monitor
 from fastapi import FastAPI
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from opentelemetry import trace
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
-from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
 
-from config import settings
 from domain import ChatRequest
 from services.chat import ChatService
 from services.embeddings import Embedder
 from services.history import HistoryStore
 from services.search import SearchIndex
+from telemetry import record_content, setup_telemetry
 
-
-def setup_observability() -> trace.Tracer:
-    if settings.applicationinsights_connection_string:
-        configure_azure_monitor(connection_string=settings.applicationinsights_connection_string)
-    HTTPXClientInstrumentor().instrument()
-    return trace.get_tracer("rag-chatbot")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -33,7 +24,7 @@ embedder = Embedder()
 chat_service = ChatService(history)
 index = SearchIndex()
 
-tracer = setup_observability()
+tracer = setup_telemetry("rag-chatbot")
 app = FastAPI(title="RAG Chatbot Sample", lifespan=lifespan)
 FastAPIInstrumentor().instrument_app(app)
 
@@ -53,6 +44,8 @@ def chat(req: ChatRequest):
             qvec = embedder.embed([req.message])[0]
             hits = index.vector_search(qvec, k=3)
             ret.set_attribute("retrieval.hits", len(hits))
+            record_content("gen_ai.content.retrieval",
+                           [{"title": h.title, "content": h.content, "url": h.url} for h in hits])
 
         with tracer.start_as_current_span("llm-call") as span:
             completion = chat_service.respond(session_id, req.message, hits, trace_id)

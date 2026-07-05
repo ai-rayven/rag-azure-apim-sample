@@ -34,3 +34,9 @@ cd ingestion && uv run python -m main
 
 Locally you run as *you*: Blob works, but Search and Postgres are locked to the app's managed identity —
 grant yourself those roles for full local end-to-end, or just run in Azure.
+
+## Observe
+
+Every chat turn runs under one W3C trace, fanned out to Log Analytics (redacted skeleton) and Postgres
+(full fidelity, incl. content). Copy the `trace_id` shown under any answer and follow it end-to-end —
+see [docs/observability.md](docs/observability.md) for the KQL and Postgres queries.

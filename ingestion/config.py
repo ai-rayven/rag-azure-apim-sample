@@ -32,6 +32,10 @@ class Settings(BaseSettings):
 
     applicationinsights_connection_string: str | None = None
 
+    # Kept in parallel with the app: opt-in capture of trace content (unused by ingestion today,
+    # which emits no content events, but keeps the shared telemetry module identical across both).
+    trace_content: bool = False
+
     @field_validator("search_endpoint")
     @classmethod
     def _strip_trailing_slash(cls, v: str) -> str:

@@ -26,6 +26,11 @@ class Settings(BaseSettings):
 
     applicationinsights_connection_string: str | None = None
 
+    # Opt-in: capture prompt/retrieval/completion content on traces. When on, content is kept only
+    # in the Postgres `spans` store and stripped before App Insights. Off by default (no content
+    # anywhere), so sensitive data is never captured unless deliberately enabled.
+    trace_content: bool = False
+
     @field_validator("search_endpoint")
     @classmethod
     def _strip_trailing_slash(cls, v: str) -> str:

@@ -22,7 +22,7 @@ acr_name  = az acr list -g $(APP_RG) --query "[0].name" -o tsv
 acr_login = az acr list -g $(APP_RG) --query "[0].loginServer" -o tsv
 
 .DEFAULT_GOAL := help
-.PHONY: help preflight fmt lint whatif deploy build release seed ingest open verify env destroy purge-apim
+.PHONY: help preflight fmt lint whatif deploy build release seed ingest open workbook verify env destroy purge-apim
 
 help:
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -63,6 +63,12 @@ ingest:
 
 open:
 	open $$($(call show,APP_URL))
+
+workbook:
+	@TENANT=$$(az account show --query tenantId -o tsv); \
+	ID=$$($(call show,WORKBOOK_ID)); \
+	[ -n "$$ID" ] || { echo "no WORKBOOK_ID output — run 'make deploy' first"; exit 1; }; \
+	open "https://portal.azure.com/#@$$TENANT/resource$$ID/workbook"
 
 env:
 	@{ \
