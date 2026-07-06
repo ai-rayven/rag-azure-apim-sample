@@ -15,9 +15,9 @@ latency by operation, token usage, and recent failures *with their trace IDs* �
 those IDs back into --trace-id to drill in. With --trace-id you get the span tree for that one
 turn, spanning app -> APIM gateway -> model (they share an OperationId; see docs/observability.md).
 
-This reads ONLY the redacted Log Analytics sink (timings/status/tokens — no prompt/completion
-text; that lives in the Postgres `spans` table by design and is out of scope here). Add --json
-for machine-readable output.
+This surfaces timings/status/tokens and the span tree — not the `gen_ai.content.*` events. Those
+also land in Log Analytics (the `AppTraces` table), but PII-scrubbed; read them with the KQL in
+docs/observability.md ("the content for one trace ID"). Add --json for machine-readable output.
 
 Keyless: queries run under your `az login` identity via the `az` CLI. You need `Reader` (or
 `Log Analytics Reader`) on the workspace in the monitoring resource group. Nothing here prints a

@@ -61,8 +61,10 @@ grant yourself those roles for full local end-to-end, or just run in Azure.
 
 ## Observe
 
-Every chat turn runs under one W3C trace, fanned out to Log Analytics (redacted skeleton) and Postgres
-(full fidelity, incl. content). Two ways in:
+Every chat turn runs under one W3C trace exported to App Insights (Log Analytics) — timings/tokens
+plus the prompt, retrieved context, and completion. The **user's own message** is PII-scrubbed by
+Azure AI Language before it leaves the app (fail closed — withheld if the scrub can't run); your own
+documents are meant to be de-identified at ingestion, not here. Two ways in:
 
 ```bash
 uv run scripts/telemetry.py                  # health overview (errors, latency p50/p95, tokens) — last 1h
@@ -71,4 +73,4 @@ uv run scripts/telemetry.py --trace-id <id>  # the full app → gateway → mode
 
 `telemetry.py` resolves the workspace from the selected azd environment (no hardcoded names). Copy the
 `trace_id` shown under any answer to follow it end-to-end — see
-[docs/observability.md](docs/observability.md) for the underlying KQL and the Postgres content queries.
+[docs/observability.md](docs/observability.md) for the underlying KQL and the redaction/hardening model.

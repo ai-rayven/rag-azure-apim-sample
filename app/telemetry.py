@@ -1,153 +1,208 @@
-"""The one central spot that owns trace routing.
+"""The one central spot that owns trace routing and content de-identification.
 
-Instrument once with OpenTelemetry; fan out to two sinks from a single TracerProvider:
+Instrument once with OpenTelemetry; export to a single sink — App Insights (the shared Log
+Analytics workspace). A /chat turn captures its prompt/retrieval/completion as `gen_ai.content.*`
+span events. Only the parts we explicitly mark are PII-scrubbed on the way out; everything else is
+exported as-is.
 
-  - Postgres (`spans` table) — the full-fidelity OTEL trace store. This is the portable
-    record: raw spans in, so a later move to Langfuse/Phoenix is a replay, not a reshape.
-    Swapping providers later == swapping the exporter here, nothing in app code changes.
-  - App Insights — the ops skeleton only. Content-bearing `gen_ai.content.*` events are
-    stripped on the way out (see RedactingSpanExporter), so sensitive prompt/completion/
-    retrieval text never lands in the shared Log Analytics workspace.
+Today the only marked field is the **user's own message** — the one bit of unpredictable, user-authored
+input. It's scrubbed by Azure AI Language (NER-based, `syntheticReplacement` policy: PII is swapped for
+realistic fakes, `John Doe` → `Sam Johnson`) using the app's managed identity (keyless). The retrieved
+documents are *your* corpus (de-identify those at ingestion, not here), and the system prompt and prior
+history pass through unchanged — see `docs/observability.md`.
 
-Prompt/completion/retrieval content is captured only when `settings.trace_content` is on
-(opt-in), and even then only the Postgres sink keeps it.
+`record_content(payload, scrub=(...))` names which top-level payload keys to scrub; the exporter
+scrubs just those and re-serializes the rest verbatim. Fail-closed: if the Language call can't run,
+the marked field is **withheld** (replaced with a marker), never exported raw.
+
+Scrubbing runs inside the exporter, on the BatchSpanProcessor's background thread, so the Azure
+Language round-trip never touches the request path.
 """
 from __future__ import annotations
 import json
 import logging
-from datetime import datetime, timezone
 from typing import Sequence
 
-import psycopg
+import httpx
 from azure.identity import DefaultAzureCredential
 from azure.monitor.opentelemetry.exporter import AzureMonitorTraceExporter
 from opentelemetry import trace
 from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
+from opentelemetry.instrumentation.utils import suppress_instrumentation
 from opentelemetry.sdk.resources import Resource
-from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
+from opentelemetry.sdk.trace import Event, ReadableSpan, TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor, SpanExporter, SpanExportResult
-from psycopg.types.json import Json
 
 from config import settings
 
 logger = logging.getLogger(__name__)
 
-# Content lives in span events under this prefix so a single filter can route it: kept by the
-# Postgres sink, dropped before App Insights. (Aligned with the OTEL GenAI content convention.)
+# Content lives in span events under this prefix (aligned with the OTEL GenAI convention). Each event
+# names the payload keys to scrub in a sibling `scrub_keys` attribute; the rest of the payload passes
+# through. Emitted in place of a marked field whenever the scrub can't run — fail closed.
 CONTENT_EVENT_PREFIX = "gen_ai.content"
+SCRUB_KEYS_ATTR = "scrub_keys"
+WITHHELD = "[content withheld: PII redaction unavailable]"
 
-SPANS_DDL = """
-CREATE TABLE IF NOT EXISTS spans (
-    trace_id       TEXT             NOT NULL,
-    span_id        TEXT             NOT NULL,
-    parent_span_id TEXT,
-    name           TEXT             NOT NULL,
-    kind           TEXT,
-    service_name   TEXT,
-    start_time     TIMESTAMPTZ      NOT NULL,
-    end_time       TIMESTAMPTZ,
-    duration_ms    DOUBLE PRECISION,
-    status_code    TEXT,
-    attributes     JSONB,
-    events         JSONB,
-    PRIMARY KEY (trace_id, span_id)
-);
-CREATE INDEX IF NOT EXISTS ix_spans_trace ON spans (trace_id);
-CREATE INDEX IF NOT EXISTS ix_spans_start ON spans (start_time DESC);
-"""
-
-INSERT = """
-INSERT INTO spans (trace_id, span_id, parent_span_id, name, kind, service_name,
-                   start_time, end_time, duration_ms, status_code, attributes, events)
-VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-ON CONFLICT (trace_id, span_id) DO NOTHING
-"""
+# Azure Language: keyless (Entra token) call to the analyze-text endpoint, using the preview
+# syntheticReplacement policy (realistic fake values), so we pin the preview API version.
+#
+# A synchronous PII request is capped at 5,120 characters/document and 5 documents/request, so
+# `redact()` splits long input into <=5,000-char chunks (headroom under 5,120), sends them 5 at a
+# time, and stitches the redacted pieces back together. We only scrub the user's own message now —
+# usually short — but a user can paste something large, so the chunking still earns its keep.
+_LANG_API_VERSION = "2025-11-15-preview"
+_LANG_SCOPE = "https://cognitiveservices.azure.com/.default"
+_REDACTION_POLICY = "syntheticReplacement"
+_LANG_MAX_DOC = 5_000  # chars/chunk, under the 5,120 per-document limit
+_LANG_BATCH = 5        # chunks/request, the PII per-request document cap
 
 
-def _ns_to_dt(ns: int | None) -> datetime | None:
-    return datetime.fromtimestamp(ns / 1e9, tz=timezone.utc) if ns else None
+class PiiScrubber:
+    """Redact PII from text with Azure AI Language (keyless, via managed identity).
 
-
-class PostgresSpanExporter(SpanExporter):
-    """Persist raw OTEL spans to the `spans` table (keyless, via the app's managed identity).
-
-    Runs on the BatchSpanProcessor's background thread, so DB latency never touches the request
-    path; failures are logged and dropped, never raised. Owns its schema (lazy CREATE on first
-    export) so it works for whichever deployable — app or ingestion — writes a span first.
+    NER-based, so it catches contextual PII (names, addresses) that patterns can't; `syntheticReplacement`
+    swaps each entity for a realistic random stand-in. The HTTP client + credential are built lazily on
+    first use and reused. Returns None on any failure (throttle, outage, misconfig, over-length, or no
+    endpoint) so the caller can fail closed rather than leak raw text. Runs on the exporter's background
+    thread, so its latency never reaches a request.
     """
 
-    def __init__(self) -> None:
-        self._cred = DefaultAzureCredential()
-        self._ready = False
+    def __init__(self, endpoint: str | None) -> None:
+        self._endpoint = endpoint.rstrip("/") if endpoint else None
+        self._cred: DefaultAzureCredential | None = None
+        self._http: httpx.Client | None = None
 
-    def _connect(self) -> psycopg.Connection:
-        scope = "https://ossrdbms-aad.database.windows.net/.default"
-        token = self._cred.get_token(scope).token
-        return psycopg.connect(
-            host=settings.pg_host, dbname=settings.pg_db, user=settings.pg_user,
-            password=token, sslmode="require",
-        )
-
-    def _row(self, span: ReadableSpan) -> tuple:
-        ctx = span.get_span_context()
-        events = [
-            {"name": e.name, "timestamp": _ns_to_dt(e.timestamp).isoformat() if e.timestamp else None,
-             "attributes": dict(e.attributes or {})}
-            for e in span.events
-        ]
-        start, end = _ns_to_dt(span.start_time), _ns_to_dt(span.end_time)
-        return (
-            format(ctx.trace_id, "032x"),
-            format(ctx.span_id, "016x"),
-            format(span.parent.span_id, "016x") if span.parent else None,
-            span.name,
-            span.kind.name,
-            span.resource.attributes.get("service.name"),
-            start, end,
-            (span.end_time - span.start_time) / 1e6 if span.start_time and span.end_time else None,
-            span.status.status_code.name,
-            Json(dict(span.attributes or {})),
-            Json(events),
-        )
-
-    def export(self, spans: Sequence[ReadableSpan]) -> SpanExportResult:
-        try:
-            with self._connect() as conn, conn.cursor() as cur:
-                if not self._ready:
-                    cur.execute(SPANS_DDL)
-                    self._ready = True
-                cur.executemany(INSERT, [self._row(s) for s in spans])
-            return SpanExportResult.SUCCESS
-        except Exception:
-            logger.exception("failed to export %d span(s) to postgres", len(spans))
-            return SpanExportResult.FAILURE
-
-    def force_flush(self, timeout_millis: int = 30000) -> bool:
+    def _ensure(self) -> bool:
+        if not self._endpoint:
+            return False
+        if self._http is None:
+            self._cred = DefaultAzureCredential()
+            self._http = httpx.Client(timeout=10.0)
         return True
 
+    def _redact_batch(self, texts: list[str], token: str) -> list[str] | None:
+        body = {
+            "kind": "PiiEntityRecognition",
+            "parameters": {
+                "modelVersion": "latest",
+                "redactionPolicies": [{"policyKind": _REDACTION_POLICY}],
+            },
+            "analysisInput": {
+                "documents": [{"id": str(i), "language": "en", "text": t} for i, t in enumerate(texts)]
+            },
+        }
+        # suppress_instrumentation: this POST runs on the exporter thread; without it the globally
+        # instrumented httpx client would emit a dependency span for every scrub call (noise, and it
+        # would loop back through this exporter).
+        with suppress_instrumentation():
+            resp = self._http.post(
+                f"{self._endpoint}/language/:analyze-text",
+                params={"api-version": _LANG_API_VERSION},
+                headers={"Authorization": f"Bearer {token}"},
+                json=body,
+            )
+        resp.raise_for_status()
+        results = resp.json()["results"]
+        if results.get("errors"):
+            return None
+        by_id = {d["id"]: d.get("redactedText") for d in results["documents"]}
+        out = [by_id.get(str(i)) for i in range(len(texts))]
+        return out if all(r is not None for r in out) else None  # fail closed on any missing doc
 
-class _SkeletonSpan:
-    """Read-only view of a span with content events hidden — everything else delegated."""
+    def redact(self, text: str) -> str | None:
+        if not self._ensure():
+            return None
+        chunks = [text[i:i + _LANG_MAX_DOC] for i in range(0, len(text), _LANG_MAX_DOC)] or [""]
+        try:
+            token = self._cred.get_token(_LANG_SCOPE).token  # DefaultAzureCredential caches/refreshes
+            out: list[str] = []
+            for start in range(0, len(chunks), _LANG_BATCH):
+                redacted = self._redact_batch(chunks[start:start + _LANG_BATCH], token)
+                if redacted is None:
+                    return None
+                out.extend(redacted)
+            return "".join(out)
+        except Exception:
+            logger.warning("Azure Language PII scrub failed; content will be withheld", exc_info=True)
+            return None
 
-    def __init__(self, span: ReadableSpan) -> None:
+
+class _ScrubbedSpan:
+    """Read-only view of a span whose marked `gen_ai.content.*` payload keys are de-identified.
+
+    Everything else — other events, timings, tokens, status — is delegated unchanged.
+    """
+
+    def __init__(self, span: ReadableSpan, scrub_text) -> None:
         self._span = span
+        self._scrub_text = scrub_text
 
     @property
     def events(self):
-        return tuple(e for e in self._span.events if not e.name.startswith(CONTENT_EVENT_PREFIX))
+        out = []
+        for e in self._span.events:
+            keys = self._marked_keys(e)
+            if keys is not None and "content" in e.attributes:
+                attrs = dict(e.attributes)
+                del attrs[SCRUB_KEYS_ATTR]  # internal routing marker — don't export it
+                attrs["content"] = self._scrub_keys(attrs["content"], keys)
+                out.append(Event(e.name, attrs, timestamp=e.timestamp))
+            else:
+                out.append(e)
+        return tuple(out)
+
+    @staticmethod
+    def _marked_keys(e) -> list | None:
+        if e.name.startswith(CONTENT_EVENT_PREFIX) and e.attributes and e.attributes.get(SCRUB_KEYS_ATTR):
+            try:
+                return json.loads(e.attributes[SCRUB_KEYS_ATTR])
+            except json.JSONDecodeError:
+                return None
+        return None
+
+    def _scrub_keys(self, content_json: str, keys: list) -> str:
+        try:
+            data = json.loads(content_json)
+        except json.JSONDecodeError:
+            return content_json
+        if not isinstance(data, dict):
+            return content_json
+        for k in keys:
+            v = data.get(k)
+            if isinstance(v, str):
+                data[k] = self._scrub_text(v)
+        return json.dumps(data)
 
     def __getattr__(self, name):
         return getattr(self._span, name)
 
 
 class RedactingSpanExporter(SpanExporter):
-    """Wrap an exporter, stripping `gen_ai.content.*` events so content never leaves for App Insights."""
+    """Wrap an exporter; de-identify the marked `gen_ai.content.*` payload keys before they leave.
 
-    def __init__(self, inner: SpanExporter) -> None:
+    Redaction is done by Azure AI Language (see PiiScrubber). Fail-closed: if the scrub can't run,
+    the marked field is withheld rather than exported raw. Unmarked content is exported as-is.
+    """
+
+    def __init__(self, inner: SpanExporter, scrubber: PiiScrubber) -> None:
         self._inner = inner
+        self._scrubber = scrubber
+
+    def _scrub_text(self, text: str) -> str:
+        redacted = self._scrubber.redact(text)  # Azure Language NER, or None on any failure
+        return redacted if redacted is not None else WITHHELD
+
+    @staticmethod
+    def _has_marked_event(span: ReadableSpan) -> bool:
+        return any(e.attributes and e.attributes.get(SCRUB_KEYS_ATTR) for e in span.events)
 
     def export(self, spans: Sequence[ReadableSpan]) -> SpanExportResult:
-        return self._inner.export([_SkeletonSpan(s) for s in spans])
+        redacted = [
+            _ScrubbedSpan(s, self._scrub_text) if self._has_marked_event(s) else s
+            for s in spans
+        ]
+        return self._inner.export(redacted)
 
     def shutdown(self) -> None:
         self._inner.shutdown()
@@ -157,30 +212,31 @@ class RedactingSpanExporter(SpanExporter):
 
 
 def setup_telemetry(tracer_name: str) -> trace.Tracer:
-    """Build the TracerProvider, wire both sinks, instrument httpx, and return the tracer.
+    """Build the TracerProvider, wire the (redacting) App Insights sink, instrument httpx.
 
     service.name (App Insights cloud role name) is read from OTEL_SERVICE_NAME in the environment.
+    With no App Insights connection string (e.g. local dev) nothing is exported at all.
     """
     provider = TracerProvider(resource=Resource.create())
 
-    # Full-fidelity OTEL spans (incl. content when captured) → the portable trace store.
-    provider.add_span_processor(BatchSpanProcessor(PostgresSpanExporter()))
-
-    # Ops skeleton → App Insights, with content events redacted out.
     if settings.applicationinsights_connection_string:
         azure = AzureMonitorTraceExporter(connection_string=settings.applicationinsights_connection_string)
-        provider.add_span_processor(BatchSpanProcessor(RedactingSpanExporter(azure)))
+        scrubber = PiiScrubber(settings.language_endpoint)
+        provider.add_span_processor(BatchSpanProcessor(RedactingSpanExporter(azure, scrubber)))
 
     trace.set_tracer_provider(provider)
     HTTPXClientInstrumentor().instrument()
     return trace.get_tracer(tracer_name)
 
 
-def record_content(name: str, payload) -> None:
-    """Attach prompt/retrieval/completion content to the current span — only when opted in.
+def record_content(name: str, payload, *, scrub: tuple[str, ...] = ()) -> None:
+    """Attach content to the current span as a `gen_ai.content.*` event.
 
-    Emitted as a `gen_ai.content.*` event: kept by Postgres, stripped before App Insights.
+    `payload` is JSON-serialized into the event. `scrub` names the top-level payload keys whose string
+    values must be PII-scrubbed (by Azure AI Language, in the exporter) before export — everything else
+    in the payload is exported verbatim. Pass a dict payload when using `scrub`.
     """
-    if not settings.trace_content:
-        return
-    trace.get_current_span().add_event(name, {"content": json.dumps(payload, default=str)})
+    attrs = {"content": json.dumps(payload, default=str)}
+    if scrub:
+        attrs[SCRUB_KEYS_ATTR] = json.dumps(list(scrub))
+    trace.get_current_span().add_event(name, attrs)

@@ -19,8 +19,22 @@ class ChatService:
         self.system_prompt = (Path(__file__).parent.parent / "prompts" / "system.md").read_text(encoding="utf-8").strip()
 
     def respond(self, session_id: str, message: str, hits: list[Hit], trace_id: str) -> Completion:
-        messages = self._messages(session_id, message, hits)
-        record_content("gen_ai.content.prompt", messages)
+        history = self._history.load(session_id)
+        context = "\n\n".join(f"[{h.title}]\n{h.content}" for h in hits)
+        messages = [
+            {"role": "system", "content": self.system_prompt},
+            *history,
+            {"role": "user", "content": f"Context:\n{context}\n\nQuestion: {message}"},
+        ]
+        # Capture the prompt decomposed so only the user's own text is PII-scrubbed (in the exporter).
+        # The system prompt, retrieved context (your documents — de-identify those at ingestion), and
+        # prior history are exported as-is.
+        record_content(
+            "gen_ai.content.prompt",
+            {"system_prompt": self.system_prompt, "history": history,
+             "context": context, "user_message": message},
+            scrub=("user_message",),
+        )
         resp = self._client.chat.completions.create(
             model=settings.chat_model,
             messages=messages,
@@ -35,11 +49,3 @@ class ChatService:
         self._history.save(session_id, "user", message, trace_id)
         self._history.save(session_id, "assistant", completion.answer, trace_id)
         return completion
-
-    def _messages(self, session_id: str, message: str, hits: list[Hit]) -> list[dict]:
-        context = "\n\n".join(f"[{h.title}]\n{h.content}" for h in hits)
-        return [
-            {"role": "system", "content": self.system_prompt},
-            *self._history.load(session_id),
-            {"role": "user", "content": f"Context:\n{context}\n\nQuestion: {message}"},
-        ]
