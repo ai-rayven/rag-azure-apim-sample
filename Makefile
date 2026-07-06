@@ -22,7 +22,7 @@ acr_name  = az acr list -g $(APP_RG) --query "[0].name" -o tsv
 acr_login = az acr list -g $(APP_RG) --query "[0].loginServer" -o tsv
 
 .DEFAULT_GOAL := help
-.PHONY: help preflight fmt lint whatif deploy build release seed ingest open workbook verify env destroy purge-apim
+.PHONY: help preflight fmt lint whatif deploy build build-ingestion release seed ingest open workbook verify env destroy purge-apim
 
 help:
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -47,6 +47,13 @@ build:
 	REG=$$($(acr_name)); \
 	[ -n "$$REG" ] || { echo "no ACR found in $(APP_RG) — run 'make deploy' first"; exit 1; }; \
 	az acr build -r $$REG -t ragchat:v1 ./app; \
+	az acr build -r $$REG -t ragchat-ingestion:v1 ./ingestion
+
+# Rebuild + push ONLY the ingestion image (the write-path Job). For an ingestion-only fix: the Job
+# already points at the mutable ragchat-ingestion:v1 tag, so this + `make ingest` ships it — no redeploy.
+build-ingestion:
+	REG=$$($(acr_name)); \
+	[ -n "$$REG" ] || { echo "no ACR found in $(APP_RG) — run 'make deploy' first"; exit 1; }; \
 	az acr build -r $$REG -t ragchat-ingestion:v1 ./ingestion
 
 release: build

@@ -117,3 +117,7 @@ def main() -> None:
         search_index.close()
         ingestion_state.close()
     print(f"ingestion complete: {stats}")
+
+
+if __name__ == "__main__":
+    main()
