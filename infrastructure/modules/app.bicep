@@ -30,6 +30,9 @@ param apimGatewayUrl string
 @description('AI Search endpoint (from rg-ai).')
 param searchEndpoint string
 
+@description('Azure AI Language endpoint (the multi-service Foundry account, from rg-ai) — the app PII-scrubs trace content here before exporting to App Insights.')
+param languageEndpoint string
+
 @description('The subscription key the app presents to the gateway; stored in kv-app.')
 @secure()
 param apimSubscriptionKey string
@@ -362,6 +365,7 @@ var sharedEnv = [
   { name: 'PG_USER', value: uamiName }
   { name: 'PG_DB', value: 'ragchat' }
   { name: 'APPLICATIONINSIGHTS_CONNECTION_STRING', value: appInsights.properties.ConnectionString }
+  { name: 'LANGUAGE_ENDPOINT', value: languageEndpoint } // PII-scrub trace content before it reaches App Insights
   { name: 'EMBED_MODEL', value: 'text-embedding-3-large' }
 ]
 

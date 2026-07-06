@@ -113,6 +113,21 @@ resource raApimFoundry 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   }
 }
 
+// App UAMI -> Foundry, for the Language PII-detection data plane (telemetry scrubbing). The
+// kind:'AIServices' account is multi-service, so the same resource that serves the models also
+// serves `/language/:analyze-text` — no separate Language resource. Keyless: the app scrubs content
+// with its managed identity, exactly like every other call. (Model egress still goes via APIM; this
+// supporting call is a direct data-plane read, not model inference, so it doesn't need the gateway.)
+resource raAppFoundryLanguage 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(foundry.id, appPrincipalId, roles.cognitiveServicesUser)
+  scope: foundry
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', roles.cognitiveServicesUser)
+    principalId: appPrincipalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
 // App UAMI -> Search (create indexes + read/write docs)
 resource raAppSearchService 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   name: guid(search.id, appPrincipalId, roles.searchServiceContributor)
@@ -135,6 +150,8 @@ resource raAppSearchData 'Microsoft.Authorization/roleAssignments@2022-04-01' = 
 }
 
 output foundryEndpoint string = foundry.properties.endpoint
+// Same account, used by the app as the Azure AI Language endpoint for PII scrubbing (LANGUAGE_ENDPOINT).
+output languageEndpoint string = foundry.properties.endpoint
 // The search service exposes no endpoint output property, so the URL is constructed from the name.
 output searchEndpoint string = 'https://${search.name}.search.windows.net'
 output searchName string = search.name

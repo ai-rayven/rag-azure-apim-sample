@@ -26,10 +26,11 @@ class Settings(BaseSettings):
 
     applicationinsights_connection_string: str | None = None
 
-    # Opt-in: capture prompt/retrieval/completion content on traces. When on, content is kept only
-    # in the Postgres `spans` store and stripped before App Insights. Off by default (no content
-    # anywhere), so sensitive data is never captured unless deliberately enabled.
-    trace_content: bool = False
+    # Azure AI Language endpoint used to PII-scrub the user's message before it's exported to App
+    # Insights. Keyless (managed identity). Required — the deployment always provisions it (the
+    # multi-service Foundry account) and provides it via env in Azure and via `make env` locally, so
+    # we never silently run without the scrubber. See telemetry.py / docs/observability.md.
+    language_endpoint: str
 
     @field_validator("search_endpoint")
     @classmethod

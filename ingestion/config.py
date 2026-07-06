@@ -32,9 +32,10 @@ class Settings(BaseSettings):
 
     applicationinsights_connection_string: str | None = None
 
-    # Kept in parallel with the app: opt-in capture of trace content (unused by ingestion today,
-    # which emits no content events, but keeps the shared telemetry module identical across both).
-    trace_content: bool = False
+    # Required, mirroring the app (the telemetry module is identical across both). Azure AI Language
+    # endpoint for PII-scrubbing; ingestion emits no content events so it never calls it, but the
+    # shared container env / `make env` always provides it, so we keep it required in both for symmetry.
+    language_endpoint: str
 
     @field_validator("search_endpoint")
     @classmethod

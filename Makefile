@@ -83,6 +83,7 @@ env:
 	  echo "APIM_BASE_URL=$$($(call show,APIM_BASE_URL))"; \
 	  echo "APIM_KEY=$$(az keyvault secret show --vault-name $$($(call show,KV_APP_NAME)) --name apim-subscription-key --query value -o tsv)"; \
 	  echo "SEARCH_ENDPOINT=$$($(call show,SEARCH_ENDPOINT))"; \
+	  echo "LANGUAGE_ENDPOINT=$$($(call show,LANGUAGE_ENDPOINT))"; \
 	  echo "PG_HOST=$$($(call show,PG_HOST))"; \
 	  echo "PG_USER=$$($(call show,UAMI_NAME))"; \
 	  echo "PG_DB=$$($(call show,PG_DB))"; \
