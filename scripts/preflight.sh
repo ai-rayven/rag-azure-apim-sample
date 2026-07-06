@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 set -uo pipefail
 
-LOCATION="${LOCATION:-eastus2}"
+# azd exports AZURE_LOCATION into the preprovision hook; fall back to LOCATION / a default for
+# standalone runs (`bash scripts/preflight.sh`).
+LOCATION="${AZURE_LOCATION:-${LOCATION:-eastus2}}"
 
 # --- output helpers ----------------------------------------------------------
 if [ -t 1 ]; then G=$'\033[32m'; Y=$'\033[33m'; R=$'\033[31m'; B=$'\033[1m'; X=$'\033[0m'; else G=; Y=; R=; B=; X=; fi
@@ -17,7 +19,8 @@ printf "${B}Preflight — RAG-on-APIM, region ${LOCATION}${X}\n"
 head "Tooling"
 if command -v az >/dev/null 2>&1; then pass "az CLI present"; else fail "az CLI not found — install the Azure CLI"; fi
 if az bicep version >/dev/null 2>&1; then pass "bicep present"; else warn "bicep not installed — 'az bicep install' (deploy will also auto-install it)"; fi
-if command -v uv >/dev/null 2>&1; then pass "uv present"; else warn "uv not found — only needed for 'make seed'"; fi
+if command -v uv >/dev/null 2>&1; then pass "uv present"; else warn "uv not found — only needed for 'uv run scripts/seed.py'"; fi
+if command -v azd >/dev/null 2>&1; then pass "azd present"; else warn "azd not found — install the Azure Developer CLI (this preflight normally runs as its preprovision hook)"; fi
 
 # Everything below needs az; bail early if it's missing.
 command -v az >/dev/null 2>&1 || { head "Result"; fail "cannot continue without az CLI"; exit 1; }
@@ -41,7 +44,7 @@ roles=$(az role assignment list --assignee "$me" --scope "/subscriptions/${sub_i
 if echo "$roles" | grep -qxE "Owner|User Access Administrator"; then
   pass "have $(echo "$roles" | grep -xE 'Owner|User Access Administrator' | sort -u | paste -sd, -) at subscription scope"
 else
-  warn "no Owner/User Access Administrator at subscription scope (found: ${roles:-none}) — deploy's role assignments will fail unless you have it via a management group"
+  warn "no Owner/User Access Administrator at subscription scope (found: ${roles:-none}) — provision's role assignments will fail unless you have it via a management group"
 fi
 
 # --- 4. AI Search free tier (one per subscription) ---------------------------
@@ -74,12 +77,12 @@ fi
 # --- result ------------------------------------------------------------------
 head "Result"
 if [ "$fails" -gt 0 ]; then
-  fail "${fails} blocking issue(s), ${warns} warning(s) — resolve the ✗ items before 'make deploy'"
+  fail "${fails} blocking issue(s), ${warns} warning(s) — resolve the ✗ items before 'azd up'"
   exit 1
 elif [ "$warns" -gt 0 ]; then
-  warn "${warns} warning(s) — review the ! items, then you're clear to 'make deploy'"
+  warn "${warns} warning(s) — review the ! items, then you're clear to 'azd up'"
   exit 0
 else
-  pass "all clear — run 'make whatif' then 'make deploy'"
+  pass "all clear — run 'azd up'"
   exit 0
 fi

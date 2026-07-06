@@ -14,6 +14,9 @@ param searchLocation string = location
 @maxLength(11)
 param baseName string = 'ragchat'
 
+@description('azd environment name (AZURE_ENV_NAME). Tagged onto the resource groups as azd-env-name so `azd` can discover and tear down what it owns. Does NOT affect resource names — those derive from baseName + a subscription-stable hash — so switching env names in one subscription adopts the same resources.')
+param environmentName string = baseName
+
 @description('Resource group for the edge/gateway tier (APIM, gateway observability).')
 param networkingRgName string = 'rg-ragchat-networking'
 
@@ -30,14 +33,16 @@ param monitoringRgName string = 'rg-ragchat-monitoring'
 @secure()
 param apimSubscriptionKey string = newGuid()
 
-@description('Container image for the app. First deploy uses the public placeholder; after `az acr build` you redeploy with <acr>.azurecr.io/ragchat:<tag>.')
+@description('Container image for the app. Provision uses the public placeholder; `azd deploy` then builds the image in ACR and updates the running container — you never set this by hand.')
 param appImage string = 'mcr.microsoft.com/k8se/quickstart:latest'
 
-@description('Container image for the ingestion Job. Placeholder until you `az acr build ./ingestion` and redeploy with <acr>.azurecr.io/ragchat-ingestion:<tag>. The Job is event-triggered by blob drops, so the placeholder is never run (no documents exist until you build + seed).')
+@description('Container image for the ingestion Job. Placeholder at provision; `azd deploy` builds ./ingestion in ACR and updates the Job. The Job is event-triggered by blob drops, so the placeholder is never run (no documents exist until you deploy + seed).')
 param ingestImage string = 'mcr.microsoft.com/k8se/quickstart:latest'
 
 var prefix = '${baseName}${uniqueString(subscription().id, baseName)}'
 var tags = { workload: 'rag-chatbot' }
+// Resource groups additionally carry azd's ownership tag so `azd down` knows what to remove.
+var rgTags = union(tags, { 'azd-env-name': environmentName })
 
 var roles = {
   cognitiveOpenAiUser: '5e0bd9bd-7b93-4f28-af87-19fc36ad61bd'
@@ -46,7 +51,7 @@ var roles = {
   searchServiceContributor: '7ca78c08-252a-4471-8644-bb5ff32d4ba0'
   acrPull: '7f951dda-4ed3-4680-a7ca-43fe172d538d'
   storageBlobDataReader: '2a2b9908-6ea1-4ae2-8e65-a410df84e7d1' // the Job CONSUMES source docs (read-only)
-  storageBlobDataContributor: 'ba92f5b4-2d11-453d-a403-e96b0029c9fe' // the deployer seeds docs (`make seed`)
+  storageBlobDataContributor: 'ba92f5b4-2d11-453d-a403-e96b0029c9fe' // the deployer seeds docs (`uv run scripts/seed.py`)
   storageQueueDataContributor: '974c5e8b-45b9-4653-ba55-5f855dd0fb88' // Job: read+delete trigger msgs; KEDA: peek length
   storageQueueDataMessageSender: 'c6a89b2d-59bc-44d0-9896-0f6e12d7b80a' // Event Grid: deliver blob events to the queue
 }
@@ -57,25 +62,25 @@ var roles = {
 resource rgNetworking 'Microsoft.Resources/resourceGroups@2024-03-01' = {
   name: networkingRgName
   location: location
-  tags: tags
+  tags: rgTags
 }
 
 resource rgApp 'Microsoft.Resources/resourceGroups@2024-03-01' = {
   name: appRgName
   location: location
-  tags: tags
+  tags: rgTags
 }
 
 resource rgAi 'Microsoft.Resources/resourceGroups@2024-03-01' = {
   name: aiRgName
   location: location
-  tags: tags
+  tags: rgTags
 }
 
 resource rgMonitoring 'Microsoft.Resources/resourceGroups@2024-03-01' = {
   name: monitoringRgName
   location: location
-  tags: tags
+  tags: rgTags
 }
 
 // ============================================================================
@@ -204,7 +209,7 @@ resource activityLog 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' 
     workspaceId: monitoring.outputs.workspaceId
     logs: [
       // Administrative is the only category we need: it covers every control-plane write — ARM
-      // deployments (make deploy/release), container-app revision writes, job starts, restarts.
+      // deployments (azd provision/deploy), container-app revision writes, job starts, restarts.
       // (There is no separate 'Deployment' category at subscription scope.)
       { category: 'Administrative', enabled: true }
     ]
@@ -224,7 +229,12 @@ module workbook 'modules/workbook.bicep' = {
 // ============================================================================
 // Outputs — endpoints and names only. No secret is ever emitted (rule 5). APP_URL is now the APIM
 // gateway root: users hit the gateway, which proxies to the app.
+// azd auto-captures every output into .azure/<env>/.env; scripts read them via `azd env get-value`.
 // ============================================================================
+// azd-conventional outputs: where azd deploys the services and pushes their images.
+output AZURE_RESOURCE_GROUP string = appRgName // ca-/caj- live here; azure.yaml services target it
+output AZURE_CONTAINER_REGISTRY_ENDPOINT string = app.outputs.acrLoginServer // azd pushes built images here
+
 output APP_URL string = networking.outputs.gatewayUrl
 output APP_DIRECT_URL string = 'https://${app.outputs.appFqdn}' // the app's own FQDN (public on Consumption); for debugging
 output APIM_BASE_URL string = '${networking.outputs.gatewayUrl}/ai/v1'
@@ -239,9 +249,9 @@ output INGEST_JOB_NAME string = app.outputs.ingestJobName // `az containerapp jo
 output PG_HOST string = app.outputs.pgHost
 output PG_DB string = app.outputs.pgDb
 output UAMI_NAME string = identity.outputs.name // = the app's Postgres login name (PG_USER)
-output KV_APP_NAME string = app.outputs.kvAppName // vault holding the APIM key; `make env` reads it locally
+output KV_APP_NAME string = app.outputs.kvAppName // vault holding the APIM key; the local-.env step reads it via this name
 output APP_INSIGHTS_NAME string = app.outputs.appInsightsName
 output GATEWAY_APP_INSIGHTS_NAME string = networking.outputs.appInsightsName
 output MONITORING_RESOURCE_GROUP string = monitoringRgName
 output LOG_ANALYTICS_NAME string = monitoring.outputs.workspaceName
-output WORKBOOK_ID string = workbook.outputs.workbookId // `make workbook` builds a portal link from this
+output WORKBOOK_ID string = workbook.outputs.workbookId // build a portal link from this: portal.azure.com/#resource<WORKBOOK_ID>/workbook

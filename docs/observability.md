@@ -66,7 +66,7 @@ union AppRequests, AppDependencies, AppTraces
 
 ## 4. Full-fidelity trace, with content (Postgres)
 
-Log Analytics has no prompt/completion/retrieval text by design. For that, query the `spans` table with the **same** trace ID (stored as the same 32-hex string). Connect keyless with an Entra token, exactly as the app does (`PG_*` come from `make env`):
+Log Analytics has no prompt/completion/retrieval text by design. For that, query the `spans` table with the **same** trace ID (stored as the same 32-hex string). Connect keyless with an Entra token, exactly as the app does (`PG_*` come from `azd env get-value PG_HOST` etc., or the generated `.env`):
 
 ```bash
 export PGPASSWORD=$(az account get-access-token \
@@ -81,6 +81,15 @@ psql "host=$PG_HOST dbname=$PG_DB user=$PG_USER sslmode=require" -c "
 The prompt, retrieved docs, and answer live in the `events` JSONB column as `gen_ai.content.*` events — **present only if `trace_content=true`** when the turn ran (opt-in; off by default so content isn't captured unless you ask for it).
 
 ## Running the queries
+
+**Script (the easy path):** `scripts/telemetry.py` wraps the two common cases against Log Analytics — it resolves the workspace from the selected azd environment, so there are no names to paste:
+
+```bash
+uv run scripts/telemetry.py                  # §3 overview: errors, latency p50/p95, tokens (last 1h)
+uv run scripts/telemetry.py --trace-id <id>  # §3 "everything for one trace", rendered as a span tree
+```
+
+It reads only Log Analytics (the redacted skeleton); for the content in §4 use the psql query above. Bypass azd with `--workspace <name-or-guid> --monitoring-rg <rg>` if you're not using an azd env.
 
 **Portal** (best for exploring the span tree): Log Analytics workspace in `rg-ragchat-monitoring` → **Logs** → paste KQL.
 
