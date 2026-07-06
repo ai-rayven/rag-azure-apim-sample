@@ -37,7 +37,7 @@ param languageEndpoint string
 @secure()
 param apimSubscriptionKey string
 
-@description('Container image. First deploy uses the public placeholder; redeploy with <acr>/ragchat:<tag>.')
+@description('Container image. Provision uses the public placeholder; `azd deploy` builds + updates it.')
 param appImage string
 
 @description('Container image for the ingestion Job. Placeholder until you build ./ingestion; the Job is event-triggered by blob drops, so the placeholder never runs.')
@@ -293,7 +293,7 @@ resource raAppAcr 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
 }
 
 // App/Job UAMI -> source Storage, READ-ONLY. The Job only consumes documents; it never writes to the
-// source. Seeding is a separate act done by a human (`make seed`), granted below — so the runtime
+// source. Seeding is a separate act done by a human (`uv run scripts/seed.py`), granted below — so the runtime
 // identity stays least-privilege (Storage Blob Data Reader), which is the posture you'd ship.
 resource raAppStorage 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   name: guid(storage.id, uamiId, roles.storageBlobDataReader)
@@ -305,7 +305,7 @@ resource raAppStorage 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   }
 }
 
-// Deployer -> source Storage (write). `make seed` uploads the demo docs from your machine as YOUR
+// Deployer -> source Storage (write). `uv run scripts/seed.py` uploads the demo docs from your machine as YOUR
 // az-login identity; with shared-key access off, that needs a data-plane role (control-plane Owner
 // isn't enough). Granting it here keeps the demo turnkey and keyless. deployer() is the principal
 // running the deployment; principalType is omitted so it resolves for a user OR a CI service principal.
@@ -318,7 +318,7 @@ resource raDeployerStorage 'Microsoft.Authorization/roleAssignments@2022-04-01' 
   }
 }
 
-// Deployer -> kv-app (read the APIM subscription key). Lets `make env` pull the one secret a local
+// Deployer -> kv-app (read the APIM subscription key). Lets the local-.env step pull the one secret a local
 // run needs into a gitignored .env — keyless, from the same source of truth as everything else. Same
 // turnkey-demo rationale as the storage grant above; principalType omitted so it resolves for a user
 // OR a CI service principal. The secret is never emitted as a Bicep output (rule 5) — only fetched
@@ -388,7 +388,7 @@ resource caEnv 'Microsoft.App/managedEnvironments@2024-03-01' = {
 resource app 'Microsoft.App/containerApps@2024-03-01' = {
   name: 'ca-${prefix}'
   location: location
-  tags: tags
+  tags: union(tags, { 'azd-service-name': 'app' }) // azd matches this to the `app` service in azure.yaml
   identity: {
     type: 'UserAssigned'
     userAssignedIdentities: { '${uamiId}': {} }
@@ -436,13 +436,13 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = {
 // push to Search. A separate deployable (its own image) sharing this UAMI (keyless) and the APIM key
 // secret, so ingest-time embeddings are audited exactly like chat. EVENT-TRIGGERED: KEDA starts an
 // execution while the trigger queue (fed by BlobCreated events) is non-empty. You can still start a
-// one-off run manually — `az containerapp job start -n <job>` (a full rescan; `make ingest`).
+// one-off run manually — `az containerapp job start -n <job>` (a full rescan).
 // Docling's models make this image large; 1 vCPU / 2 GiB gives the parse room to run.
 // api 2024-10-02-preview: managed-identity auth on job scale rules (the `identity` field below).
 resource ingestJob 'Microsoft.App/jobs@2024-10-02-preview' = {
   name: 'caj-${prefix}'
   location: location
-  tags: tags
+  tags: union(tags, { 'azd-service-name': 'ingestion' }) // azd matches this to the `ingestion` service; updated via the Jobs API
   identity: {
     type: 'UserAssigned'
     userAssignedIdentities: { '${uamiId}': {} }

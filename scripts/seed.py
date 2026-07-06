@@ -16,14 +16,15 @@ you don't start the Job by hand. This is exactly the real path a user takes: dro
 Keyless: authenticates to Storage with your `az login` identity (the account has no keys). You need
 Storage Blob Data Contributor on the account, which the deploying user gets by default.
 
-    make seed                                 # from the repo root (resolves STORAGE_ACCOUNT for you)
-    STORAGE_ACCOUNT=<name> uv run scripts/seed.py    # standalone
+    uv run scripts/seed.py                    # resolves STORAGE_ACCOUNT from the selected azd env
+    STORAGE_ACCOUNT=<name> uv run scripts/seed.py    # standalone, explicit account
 
 Point it at your own files instead of the samples with SAMPLES_DIR=/path/to/docs.
 """
 
 import mimetypes
 import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -33,13 +34,29 @@ from dotenv import load_dotenv
 
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
-ACCOUNT = os.getenv("STORAGE_ACCOUNT") or os.getenv("BLOB_ACCOUNT")
+
+def azd_env(key: str) -> str | None:
+    """Read one value from the selected azd environment (.azure/<env>/.env). None if azd is absent
+    or the key is unset — so an explicit env var / .env still wins and standalone use keeps working."""
+    try:
+        proc = subprocess.run(["azd", "env", "get-value", key],
+                              capture_output=True, text=True, check=False)
+    except FileNotFoundError:
+        return None
+    val = proc.stdout.strip()
+    if proc.returncode != 0 or not val or val.upper().startswith("ERROR"):
+        return None
+    return val
+
+
+ACCOUNT = os.getenv("STORAGE_ACCOUNT") or os.getenv("BLOB_ACCOUNT") or azd_env("STORAGE_ACCOUNT")
 CONTAINER = os.getenv("BLOB_CONTAINER", "documents")
 SAMPLES_DIR = Path(os.getenv("SAMPLES_DIR") or Path(__file__).parent / "samples")
 
 def main() -> None:
     if not ACCOUNT:
-        sys.exit("set STORAGE_ACCOUNT (the deployment output) — e.g. `make seed`, or export it")
+        sys.exit("could not resolve STORAGE_ACCOUNT — select an azd env (`azd env select <name>`) "
+                 "or export STORAGE_ACCOUNT")
 
     files = sorted(p for p in SAMPLES_DIR.iterdir() if p.is_file())
     if not files:

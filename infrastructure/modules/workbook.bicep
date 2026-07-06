@@ -31,4 +31,4 @@ resource workbook 'Microsoft.Insights/workbooks@2023-06-01' = {
   }
 }
 
-output workbookId string = workbook.id // full resource ID; the Makefile builds a portal deep link from it
+output workbookId string = workbook.id // full resource ID; build a portal deep link from it (see the WORKBOOK_ID output)

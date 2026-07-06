@@ -28,8 +28,9 @@ class Settings(BaseSettings):
 
     # Azure AI Language endpoint used to PII-scrub the user's message before it's exported to App
     # Insights. Keyless (managed identity). Required — the deployment always provisions it (the
-    # multi-service Foundry account) and provides it via env in Azure and via `make env` locally, so
-    # we never silently run without the scrubber. See telemetry.py / docs/observability.md.
+    # multi-service Foundry account) and provides it via env in Azure and via the generated `.env`
+    # locally (`azd env get-values`), so we never silently run without the scrubber. See
+    # telemetry.py / docs/observability.md.
     language_endpoint: str
 
     @field_validator("search_endpoint")

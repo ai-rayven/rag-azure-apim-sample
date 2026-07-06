@@ -1,0 +1,45 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/Azure/azure-dev/main/schemas/v1.0/azure.yaml.json
+#
+# Azure Developer CLI (azd) project manifest — the single entrypoint for provision + deploy.
+#   azd env new ragchat      # create an environment (keeps baseName=ragchat -> adopts existing resources)
+#   azd env set SEARCH_LOCATION eastus
+#   azd up                   # provision (bicep) + build/push images (ACR) + deploy to ca-/caj-
+#   azd down --purge         # tear down, incl. soft-delete purge of APIM / OpenAI / Key Vault
+#
+# Deployment identity lives in the azd environment (.azure/<env>/.env), not hardcoded — bicep outputs
+# auto-populate it, and scripts read it via `azd env get-value`.
+name: rag-azure-apim-sample
+metadata:
+  template: rag-azure-apim-sample@0.1.0
+
+infra:
+  provider: bicep
+  path: infrastructure
+  module: main            # infrastructure/main.bicep + main.bicepparam
+
+hooks:
+  # The only hook. Seeding (scripts/seed.py) and local .env generation stay MANUAL commands
+  # (see README) rather than automated lifecycle steps.
+  preprovision:
+    shell: sh
+    run: bash scripts/preflight.sh
+    continueOnError: false
+
+services:
+  app:
+    project: ./app
+    language: docker        # the Dockerfile is authoritative (uv sync + uvicorn)
+    host: containerapp      # deploys to ca-<prefix> (matched by the azd-service-name tag)
+    resourceGroup: ${AZURE_RESOURCE_GROUP}   # rgApp — ca-/caj- both live here
+    docker:
+      path: ./Dockerfile
+      remoteBuild: true     # build in ACR (matches the old `az acr build`; no local Docker daemon)
+
+  ingestion:
+    project: ./ingestion
+    language: docker
+    host: containerapp      # azd detects the Microsoft.App/jobs resource -> updates via the Jobs API
+    resourceGroup: ${AZURE_RESOURCE_GROUP}
+    docker:
+      path: ./Dockerfile
+      remoteBuild: true

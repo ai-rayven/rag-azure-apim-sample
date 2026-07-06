@@ -106,6 +106,15 @@ Redaction is never perfect, so treat the workspace as sensitive too:
 
 ## Running the queries
 
+**Script (the easy path):** `scripts/telemetry.py` wraps the two common cases against Log Analytics — it resolves the workspace from the selected azd environment, so there are no names to paste:
+
+```bash
+uv run scripts/telemetry.py                  # §3 overview: errors, latency p50/p95, tokens (last 1h)
+uv run scripts/telemetry.py --trace-id <id>  # §3 "everything for one trace", rendered as a span tree
+```
+
+It surfaces timings/status/tokens and the span tree, not the `gen_ai.content.*` events; for the redacted content of a turn, run the `AppTraces` query above ("the content for one trace ID"). Bypass azd with `--workspace <name-or-guid> --monitoring-rg <rg>` if you're not using an azd env.
+
 **Portal** (best for exploring the span tree): Log Analytics workspace in `rg-ragchat-monitoring` → **Logs** → paste KQL.
 
 **CLI:** resolve the workspace GUID once, then query. The workspace name is hashed, so look it up by resource group rather than hardcoding:
