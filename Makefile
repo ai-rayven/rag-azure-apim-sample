@@ -1,104 +1,89 @@
 DEPLOYMENT ?= ragchat
 LOCATION   ?= eastus2
-# AI Search region. Split from LOCATION because Search capacity is often exhausted in a region
-# independently of everything else. eastus2 (our LOCATION, for gpt-5-mini) has NO Search capacity
-# region-wide, so Search lives in eastus — this default keeps deploy/release/whatif self-consistent.
-# A Search service cannot change regions once created; override only for a fresh deployment elsewhere.
 SEARCH_LOCATION ?= eastus
 PARAMS     := infrastructure/main.bicepparam --parameters searchLocation=$(SEARCH_LOCATION)
 
 RESOURCE_GROUPS := rg-ragchat-networking rg-ragchat-app rg-ragchat-ai rg-ragchat-monitoring
 
-# Fetch one deployment output by name. ARM camel-cases output keys (APP_URL -> apP_URL), which breaks
-# a case-sensitive JMESPath lookup — so resolve the key case-insensitively with jq (needs jq installed).
 show = az deployment sub show -n $(DEPLOYMENT) -o json --query properties.outputs | jq -r --arg k "$(1)" '[to_entries[]|select(.key|ascii_downcase==($$k|ascii_downcase))][0].value.value'
 
-# The app tier's resource group — home of the ACR. build/release resolve the registry from HERE rather
-# than from deployment outputs, because a FAILED deployment record exposes no outputs, which would break
-# any retry-after-failure (a failed release leaves exactly that state). The RG always survives, so this
-# is self-healing. Precondition is unchanged: the ACR must already exist, i.e. run `make deploy` once first.
 APP_RG    ?= rg-ragchat-app
 acr_name  = az acr list -g $(APP_RG) --query "[0].name" -o tsv
 acr_login = az acr list -g $(APP_RG) --query "[0].loginServer" -o tsv
 
 .DEFAULT_GOAL := help
-.PHONY: help preflight fmt lint whatif deploy build build-ingestion release seed ingest open workbook verify env destroy purge-apim
+.PHONY: help preflight format-infrastructure validate-infrastructure bootstrap-infrastructure \
+        build-app build-ingest deploy-infrastructure seed ingest open-app open-dashboard \
+        verify-infrastructure destroy-infrastructure 
 
 help:
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
-	  | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}'
+	  | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-26s\033[0m %s\n", $$1, $$2}'
 
-preflight:
+# --- Infrastructure -----------------------------------------------------------
+
+preflight: ## Check region has capacity for the models/services before deploying
 	@LOCATION="$(LOCATION)" bash scripts/preflight.sh
 
-fmt: 
+format-infrastructure: ## Format the bicep templates in place
 	az bicep format --file infrastructure/main.bicep
 
-lint:
+validate-infrastructure: ## Lint the bicep and preview changes (what-if) before deploying
 	az bicep lint --file infrastructure/main.bicep
-
-whatif: 
 	az deployment sub what-if -n $(DEPLOYMENT) --location $(LOCATION) --parameters $(PARAMS)
 
-deploy:
+bootstrap-infrastructure: ## First-time deploy: stands up all infra with placeholder images (creates the ACR)
 	az deployment sub create -n $(DEPLOYMENT) --location $(LOCATION) --parameters $(PARAMS)
 
-build:
-	REG=$$($(acr_name)); \
-	[ -n "$$REG" ] || { echo "no ACR found in $(APP_RG) — run 'make deploy' first"; exit 1; }; \
-	az acr build -r $$REG -t ragchat:v1 ./app; \
-	az acr build -r $$REG -t ragchat-ingestion:v1 ./ingestion
-
-# Rebuild + push ONLY the ingestion image (the write-path Job). For an ingestion-only fix: the Job
-# already points at the mutable ragchat-ingestion:v1 tag, so this + `make ingest` ships it — no redeploy.
-build-ingestion:
-	REG=$$($(acr_name)); \
-	[ -n "$$REG" ] || { echo "no ACR found in $(APP_RG) — run 'make deploy' first"; exit 1; }; \
-	az acr build -r $$REG -t ragchat-ingestion:v1 ./ingestion
-
-release: build
+deploy-infrastructure: ## Deploy/update infra and point the app + job at the real images (run after build-app/build-ingest)
 	REG=$$($(acr_login)); \
-	[ -n "$$REG" ] || { echo "no ACR found in $(APP_RG) — run 'make deploy' first"; exit 1; }; \
+	[ -n "$$REG" ] || { echo "no ACR found in $(APP_RG) — run 'make bootstrap-infrastructure' first"; exit 1; }; \
 	az deployment sub create -n $(DEPLOYMENT) --location $(LOCATION) --parameters $(PARAMS) \
 	  --parameters appImage=$$REG/ragchat:v1 ingestImage=$$REG/ragchat-ingestion:v1
 
-seed: 
+# --- Containers ---------------------------------------------------------------
+
+build-app: ## Build & push the app image to ACR
+	REG=$$($(acr_name)); \
+	[ -n "$$REG" ] || { echo "no ACR found in $(APP_RG) — run 'make bootstrap-infrastructure' first"; exit 1; }; \
+	az acr build -r $$REG -t ragchat:v1 ./app
+
+# Rebuild + push ONLY the ingestion image (the write-path Job). For an ingestion-only fix: the Job
+# already points at the mutable ragchat-ingestion:v1 tag, so this + `make ingest` ships it — no redeploy.
+build-ingest: ## Build & push the ingestion image to ACR
+	REG=$$($(acr_name)); \
+	[ -n "$$REG" ] || { echo "no ACR found in $(APP_RG) — run 'make bootstrap-infrastructure' first"; exit 1; }; \
+	az acr build -r $$REG -t ragchat-ingestion:v1 ./ingestion
+
+# --- Data ---------------------------------------------------------------------
+
+seed: ## Upload the sample documents to blob storage
 	STORAGE_ACCOUNT=$$($(call show,STORAGE_ACCOUNT)) uv run --script scripts/seed.py
 
-ingest:
+ingest: ## Run the ingestion job to index the seeded documents
 	az containerapp job start -n $$($(call show,INGEST_JOB_NAME)) -g $$($(call show,APP_RESOURCE_GROUP))
 
-open:
+# --- Open ---------------------------------------------------------------------
+
+open-app: ## Open the deployed app in the browser
 	open $$($(call show,APP_URL))
 
-workbook:
+open-dashboard: ## Open the monitoring workbook in the Azure portal
 	@TENANT=$$(az account show --query tenantId -o tsv); \
 	ID=$$($(call show,WORKBOOK_ID)); \
-	[ -n "$$ID" ] || { echo "no WORKBOOK_ID output — run 'make deploy' first"; exit 1; }; \
+	[ -n "$$ID" ] || { echo "no WORKBOOK_ID output — run 'make bootstrap-infrastructure' first"; exit 1; }; \
 	open "https://portal.azure.com/#@$$TENANT/resource$$ID/workbook"
 
-env:
-	@{ \
-	  echo "# Generated by 'make env' from deployment '$(DEPLOYMENT)'. Do not commit (see .gitignore)."; \
-	  echo "APIM_BASE_URL=$$($(call show,APIM_BASE_URL))"; \
-	  echo "APIM_KEY=$$(az keyvault secret show --vault-name $$($(call show,KV_APP_NAME)) --name apim-subscription-key --query value -o tsv)"; \
-	  echo "SEARCH_ENDPOINT=$$($(call show,SEARCH_ENDPOINT))"; \
-	  echo "PG_HOST=$$($(call show,PG_HOST))"; \
-	  echo "PG_USER=$$($(call show,UAMI_NAME))"; \
-	  echo "PG_DB=$$($(call show,PG_DB))"; \
-	  echo "BLOB_ACCOUNT=$$($(call show,STORAGE_ACCOUNT))"; \
-	  echo "BLOB_CONTAINER=$$($(call show,BLOB_CONTAINER))"; \
-	} > .env
-	@echo "wrote .env — endpoints from deployment outputs, APIM_KEY read from kv-app (keyless)"
+# --- Verify / teardown --------------------------------------------------------
 
-verify:
+verify-infrastructure: ## Check the live deployment is keyless and print its outputs (no secrets)
 	@echo "storage allowSharedKeyAccess (want: false):"
 	@az storage account show -n $$($(call show,STORAGE_ACCOUNT)) -g $$($(call show,APP_RESOURCE_GROUP)) \
 	  --query allowSharedKeyAccess -o tsv
 	@echo "deployment outputs (endpoints + names only — no secrets):"
 	@az deployment sub show -n $(DEPLOYMENT) --query properties.outputs -o json
 
-destroy:
+destroy-infrastructure: ## Delete all resource groups and purge soft-deleted resources
 	@echo "About to DELETE these resource groups and everything in them:"; \
 	for rg in $(RESOURCE_GROUPS); do echo "  - $$rg"; done; \
 	read -p "Type the deployment name ('$(DEPLOYMENT)') to confirm: " ans; \
@@ -125,12 +110,4 @@ destroy:
 	  loc=$$(echo "$$l" | tr '[:upper:]' '[:lower:]' | tr -d ' '); \
 	  echo "  purging Key Vault $$n ($$loc)"; az keyvault purge --name "$$n" --location "$$loc" >/dev/null; \
 	done; \
-	echo "teardown complete — RGs gone, ghosts purged. Safe to 'make deploy LOCATION=<region>' anywhere."
-
-purge-apim:
-	@echo "soft-deleted APIM services in $(LOCATION):"; \
-	az apim deletedservice list --query "[?location=='$(LOCATION)'].{name:name, scheduledPurgeDate:properties.scheduledPurgeDate}" -o table; \
-	for name in $$(az apim deletedservice list --query "[?location=='$(LOCATION)'].name" -o tsv); do \
-	  echo "purging $$name ..."; \
-	  az apim deletedservice purge --service-name $$name --location $(LOCATION); \
-	done
+	echo "teardown complete — RGs gone, ghosts purged. Safe to 'make bootstrap-infrastructure LOCATION=<region>' anywhere."
