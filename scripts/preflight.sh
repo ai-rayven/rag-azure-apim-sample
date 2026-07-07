@@ -62,7 +62,7 @@ head "Resource provider registration"
 unreg=""
 for ns in Microsoft.ManagedIdentity Microsoft.ApiManagement Microsoft.OperationalInsights \
           Microsoft.Insights Microsoft.CognitiveServices Microsoft.Search \
-          Microsoft.ContainerRegistry Microsoft.App Microsoft.DBforPostgreSQL \
+          Microsoft.ContainerRegistry Microsoft.App Microsoft.DocumentDB \
           Microsoft.Storage Microsoft.KeyVault Microsoft.EventGrid; do
   state=$(az provider show -n "$ns" --query registrationState -o tsv 2>/dev/null)
   [ "$state" != "Registered" ] && unreg="${unreg} ${ns}"

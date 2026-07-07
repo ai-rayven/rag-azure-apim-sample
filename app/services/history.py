@@ -1,54 +1,45 @@
 from __future__ import annotations
-import psycopg
+import uuid
+from datetime import datetime, timezone
+
+from azure.cosmos import CosmosClient
 from azure.identity import DefaultAzureCredential
 
 from config import settings
 
-DDL = """
-CREATE TABLE IF NOT EXISTS messages (
-    id          BIGSERIAL PRIMARY KEY,
-    session_id  UUID        NOT NULL,
-    role        TEXT        NOT NULL,
-    content     TEXT        NOT NULL,
-    trace_id    TEXT,
-    created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-CREATE INDEX IF NOT EXISTS ix_messages_session ON messages (session_id, created_at);
-"""
-
 
 class HistoryStore:
+    """Chat history in a Cosmos DB (NoSQL) container — one document per message.
+
+    Keyless: DefaultAzureCredential selects the app UAMI and the SDK exchanges it for a Cosmos
+    data-plane token (the account has local auth disabled). The `messages` container — partition
+    key `/session_id` — is provisioned by Bicep, so there is no schema/DDL step at startup.
+    """
+
     def __init__(self) -> None:
-        self._cred = DefaultAzureCredential()
-
-    def _connect(self) -> psycopg.Connection:
-        scope = "https://ossrdbms-aad.database.windows.net/.default"
-        token = self._cred.get_token(scope).token
-        return psycopg.connect(
-            host=settings.pg_host,
-            dbname=settings.pg_db,
-            user=settings.pg_user,
-            password=token,
-            sslmode="require",
-        )
-
-    def migrate(self) -> None:
-        with self._connect() as conn, conn.cursor() as cur:
-            cur.execute(DDL)
+        client = CosmosClient(settings.cosmos_endpoint, credential=DefaultAzureCredential())
+        db = client.get_database_client(settings.cosmos_db)
+        self._container = db.get_container_client("messages")
 
     def load(self, session_id: str, limit: int = 10) -> list[dict]:
-        with self._connect() as conn, conn.cursor() as cur:
-            cur.execute(
-                "SELECT role, content FROM messages WHERE session_id = %s "
-                "ORDER BY created_at DESC LIMIT %s",
-                (session_id, limit),
-            )
-            rows = cur.fetchall()
-        return [{"role": r, "content": c} for r, c in reversed(rows)]
+        # Single-partition query (keyed by session_id): newest `limit` messages, returned oldest-first.
+        # created_at is an ISO-8601 UTC string, so lexicographic DESC == chronological DESC.
+        rows = list(self._container.query_items(
+            query=(
+                "SELECT c.role, c.content FROM c WHERE c.session_id = @sid "
+                "ORDER BY c.created_at DESC OFFSET 0 LIMIT @n"
+            ),
+            parameters=[{"name": "@sid", "value": session_id}, {"name": "@n", "value": limit}],
+            partition_key=session_id,
+        ))
+        return [{"role": r["role"], "content": r["content"]} for r in reversed(rows)]
 
     def save(self, session_id: str, role: str, content: str, trace_id: str | None) -> None:
-        with self._connect() as conn, conn.cursor() as cur:
-            cur.execute(
-                "INSERT INTO messages (session_id, role, content, trace_id) VALUES (%s, %s, %s, %s)",
-                (session_id, role, content, trace_id),
-            )
+        self._container.create_item({
+            "id": str(uuid.uuid4()),
+            "session_id": session_id,
+            "role": role,
+            "content": content,
+            "trace_id": trace_id,  # correlates a turn with its App Insights trace
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        })

@@ -36,7 +36,7 @@ services:
       remoteBuild: true     # build in ACR (no local Docker daemon)
 
   ingestion:
-    project: ./jobs/ingestion-job
+    project: ./jobs/ingestion
     language: docker
     host: containerapp      # azd detects the Microsoft.App/jobs resource -> updates via the Jobs API
     resourceGroup: ${AZURE_RESOURCE_GROUP}

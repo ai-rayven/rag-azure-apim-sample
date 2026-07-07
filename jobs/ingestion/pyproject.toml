@@ -12,7 +12,7 @@ dependencies = [
     "azure-identity>=1.19",
     "azure-storage-blob>=12.23",
     "azure-storage-queue>=12.17.0",
-    "psycopg[binary]>=3.2",
+    "azure-cosmos>=4.9",
     "azure-monitor-opentelemetry>=1.6",
     "opentelemetry-instrumentation-httpx>=0.48b0",
 ]

@@ -24,6 +24,10 @@ esac
 
 [ -n "${url:-}" ] || { echo "no URL for '${target}' — has 'azd up' run in this environment?" >&2; exit 1; }
 
+# --print: resolve the URL only, don't launch a browser (for automation, e.g. the `use` skill
+# driving Playwright — open.sh stays the one place that knows how to resolve the URL).
+if [ "${2:-}" = "--print" ]; then echo "$url"; exit 0; fi
+
 # open (macOS) / xdg-open (Linux); otherwise just print it.
 if command -v open >/dev/null 2>&1; then open "$url"
 elif command -v xdg-open >/dev/null 2>&1; then xdg-open "$url"

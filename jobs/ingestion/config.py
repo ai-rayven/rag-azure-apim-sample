@@ -18,9 +18,8 @@ class Settings(BaseSettings):
     search_api_version: str = "2024-07-01"
     search_batch_size: int = 500
 
-    pg_host: str
-    pg_db: str
-    pg_user: str
+    cosmos_endpoint: str
+    cosmos_db: str = "ragchat"
 
     blob_account: str
     blob_container: str = "documents"

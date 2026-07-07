@@ -5,7 +5,7 @@ the one secret in Key Vault, nothing in source control. One APIM gateway fronts 
 model; ingestion is an event-driven Container Apps Job. Minimal SKUs, cheap to stand up and tear down.
 
 ```
-Browser ─▶ APIM ─▶ Container App (FastAPI) ─▶ AI Search · Postgres
+Browser ─▶ APIM ─▶ Container App (FastAPI) ─▶ AI Search · Cosmos DB
                         └─ APIM ─▶ Azure OpenAI      (all keyless, via managed identity)
 
 Blob drop ─▶ Event Grid ─▶ queue ─▶ Ingestion Job (Docling parse → embed → AI Search)
@@ -45,8 +45,9 @@ echo "APIM_KEY=$(az keyvault secret show --vault-name $(azd env get-value KV_APP
 cd app && uv run uvicorn main:app --reload
 ```
 
-Caveat: locally you run as *you*, and Search/Postgres are locked to the app's managed identity — so this
-only exercises code paths that don't hit them unless you grant yourself those roles. For end-to-end, `azd up`.
+Caveat: locally you run as *you*, and Search/Cosmos DB are locked to the app's managed identity — so this
+only exercises code paths that don't hit them unless you grant yourself those roles. (The deploy already
+grants the deployer the Cosmos data-plane role for portal access, so that one you have.) For end-to-end, `azd up`.
 
 # Debugging
 

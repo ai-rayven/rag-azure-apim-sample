@@ -1,7 +1,7 @@
 [project]
 name = "rag-chatbot-sample"
 version = "0.1.0"
-description = "Enterprise RAG chatbot sample: FastAPI, keyless (managed identity) to Postgres/Search, LLMs via APIM, OTel -> App Insights"
+description = "Enterprise RAG chatbot sample: FastAPI, keyless (managed identity) to Cosmos DB/Search, LLMs via APIM, OTel -> App Insights"
 requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.115",
@@ -9,7 +9,7 @@ dependencies = [
     "openai>=1.50",
     "httpx>=0.27",
     "pydantic-settings>=2.5",
-    "psycopg[binary]>=3.2",
+    "azure-cosmos>=4.9",
     "azure-identity>=1.19",
     "azure-monitor-opentelemetry>=1.6",
     "opentelemetry-instrumentation-httpx>=0.48b0",

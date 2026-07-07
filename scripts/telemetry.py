@@ -246,8 +246,8 @@ def run_trace(guid: str, trace_id: str, as_json: bool) -> None:
     if not rows:
         print(f"\nNo telemetry found for trace {trace_id}.")
         print("It may have aged out of retention, or the ID is wrong. "
-              "For prompt/completion content, query the Postgres `spans` table "
-              "(docs/observability.md §4).")
+              "For prompt/completion content, query the `gen_ai.content.*` events in "
+              "AppTraces (docs/observability.md §3).")
         return
 
     print(f"\n\033[1mTrace {trace_id}\033[0m")

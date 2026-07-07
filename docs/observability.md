@@ -90,7 +90,7 @@ The one bit of content this app can't predict is what the user types, so that's 
 - **What's NOT scrubbed — and why it's still OK:**
   - *Retrieved documents / `context`* — this is **your own corpus**. De-identify it once, at **ingestion** (before indexing), not on every chat turn. Until you add that, retrieved-doc PII reaches the workspace as-is.
   - *`completion`* — the model's answer can echo the user's input or document PII; it's exported as-is today.
-  - *`history`* — prior user turns live here and aren't scrubbed (they're already stored raw in the Postgres `history` table).
+  - *`history`* — prior user turns live here and aren't scrubbed (they're already stored raw in the Cosmos DB `messages` container).
 
   So treat the workspace itself as sensitive: **RBAC** (Reader / table-level access on `AppTraces`), **short retention**, and the **Purge API** — see below.
 

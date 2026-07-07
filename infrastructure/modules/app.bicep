@@ -9,20 +9,14 @@ param prefix string
 @description('Tags applied to every resource.')
 param tags Tags
 
-@description('Entra tenant ID (for Key Vault and Postgres Entra auth).')
-param tenantId string
-
 @description('App UAMI resource ID — the identity the container runs as.')
 param uamiId string
 
-@description('App UAMI principalId (objectId) — used for RBAC and as the Postgres Entra admin.')
+@description('App UAMI principalId (objectId) — used for RBAC, incl. the Cosmos DB data-plane role.')
 param uamiPrincipalId string
 
 @description('App UAMI clientId — selects this identity for DefaultAzureCredential.')
 param uamiClientId string
-
-@description('App UAMI name — also the Postgres login name the app connects as.')
-param uamiName string
 
 @description('APIM gateway root URL (from rg-networking). The app calls the LLM API at <url>/ai/v1.')
 param apimGatewayUrl string
@@ -182,53 +176,87 @@ resource egSub 'Microsoft.EventGrid/systemTopics/eventSubscriptions@2024-06-01-p
   dependsOn: [raEgTopicQueue] // the topic identity must be able to write the queue before events flow
 }
 
-// ---------- Postgres — Entra-only (no password). The UAMI is the server's Entra admin ----------
-resource postgres 'Microsoft.DBforPostgreSQL/flexibleServers@2024-08-01' = {
-  name: 'pg-${prefix}'
+// ---------- Cosmos DB (NoSQL) — keyless: local auth disabled, Entra data-plane RBAC only. ----------
+// Serverless (pay-per-RU) fits the two tiny collections this sample keeps: chat history and
+// ingestion dedup state. The RAG vector store is Azure AI Search, not this account.
+resource cosmos 'Microsoft.DocumentDB/databaseAccounts@2024-11-15' = {
+  name: 'cosmos-${prefix}'
   location: location
   tags: tags
-  sku: { name: 'Standard_B1ms', tier: 'Burstable' }
+  kind: 'GlobalDocumentDB'
   properties: {
-    version: '16'
-    storage: { storageSizeGB: 32 }
-    highAvailability: { mode: 'Disabled' }
-    network: { publicNetworkAccess: 'Enabled' }
-    authConfig: {
-      activeDirectoryAuth: 'Enabled'
-      passwordAuth: 'Disabled' // <-- the password is gone; there is nothing to leak or rotate
-      tenantId: tenantId
+    databaseAccountOfferType: 'Standard'
+    disableLocalAuth: true // <-- keyless: account keys are rejected; only Entra tokens + data-plane RBAC
+    consistencyPolicy: { defaultConsistencyLevel: 'Session' }
+    locations: [ { locationName: location, failoverPriority: 0, isZoneRedundant: false } ]
+    capabilities: [ { name: 'EnableServerless' } ] // pay-per-request; no provisioned throughput to size
+    publicNetworkAccess: 'Enabled' // private endpoint is the rg-networking hardening pass (as with the others)
+  }
+}
+
+resource cosmosDb 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases@2024-11-15' = {
+  parent: cosmos
+  name: 'ragchat'
+  properties: { resource: { id: 'ragchat' } }
+}
+
+// Chat history — one document per message, partitioned by session so a turn's history is a
+// single-partition query. Provisioned here so the app needs no DDL/migrate step at startup.
+resource messagesContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-11-15' = {
+  parent: cosmosDb
+  name: 'messages'
+  properties: {
+    resource: {
+      id: 'messages'
+      partitionKey: { paths: ['/session_id'], kind: 'Hash' }
     }
   }
 }
 
-resource pgDb 'Microsoft.DBforPostgreSQL/flexibleServers/databases@2024-08-01' = {
-  parent: postgres
-  name: 'ragchat'
-}
-
-// Let Azure-hosted resources (the Container App) reach Postgres. 0.0.0.0 is the documented
-// "allow all Azure services" sentinel — not a public-internet opening.
-resource pgFwAzure 'Microsoft.DBforPostgreSQL/flexibleServers/firewallRules@2024-08-01' = {
-  parent: postgres
-  name: 'allow-azure-services'
-  properties: { startIpAddress: '0.0.0.0', endIpAddress: '0.0.0.0' }
-}
-
-// The server's Entra admin IS the app's UAMI — the admin resource's NAME is the principal's objectId.
-// Bicep needs a resource name known at deployment start; uamiPrincipalId is a module PARAMETER (not a
-// live resource reference), so it qualifies — no separate module needed to launder it.
-resource pgAadAdmin 'Microsoft.DBforPostgreSQL/flexibleServers/administrators@2024-08-01' = {
-  parent: postgres
-  name: uamiPrincipalId
+// Ingestion dedup state — one document per source doc, partitioned by doc_id (point upserts/deletes).
+resource stateContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-11-15' = {
+  parent: cosmosDb
+  name: 'ingest_state'
   properties: {
-    principalType: 'ServicePrincipal'
-    principalName: uamiName // the Postgres login name the app connects as
-    tenantId: tenantId
+    resource: {
+      id: 'ingest_state'
+      partitionKey: { paths: ['/doc_id'], kind: 'Hash' }
+    }
   }
-  dependsOn: [pgFwAzure, pgDb] // avoid concurrent server modifications
 }
 
-// ---------- Diagnostics -> central workspace (KV audit, Postgres logs, Blob/Queue data-plane logs) ----------
+// Cosmos DB Built-in Data Contributor (read+write, data plane). This is a Cosmos sqlRoleAssignment,
+// NOT a Microsoft.Authorization/roleAssignments — control-plane Owner/Contributor on the account grant
+// zero data access. With disableLocalAuth on, without this role even the subscription owner can't read
+// a document.
+var cosmosDataContributor = '00000000-0000-0000-0000-000000000002'
+
+// App/Job UAMI -> Cosmos data plane: the app reads/writes history + dedup state as itself, keyless.
+resource raAppCosmos 'Microsoft.DocumentDB/databaseAccounts/sqlRoleAssignments@2024-11-15' = {
+  parent: cosmos
+  name: guid(cosmos.id, uamiId, cosmosDataContributor)
+  properties: {
+    roleDefinitionId: '${cosmos.id}/sqlRoleDefinitions/${cosmosDataContributor}'
+    principalId: uamiPrincipalId
+    scope: cosmos.id
+  }
+}
+
+// Deployer -> Cosmos data plane: portal access. Data Explorer refuses to browse/query documents
+// without a data-plane role (local auth is off), even for the subscription owner — this makes
+// "look at + query the data in the portal" work right after `azd up`. principalType omitted so it
+// resolves for a user OR a CI service principal (same turnkey pattern as the storage/kv grants).
+resource raDeployerCosmos 'Microsoft.DocumentDB/databaseAccounts/sqlRoleAssignments@2024-11-15' = {
+  parent: cosmos
+  name: guid(cosmos.id, deployer().objectId, cosmosDataContributor)
+  properties: {
+    roleDefinitionId: '${cosmos.id}/sqlRoleDefinitions/${cosmosDataContributor}'
+    principalId: deployer().objectId
+    scope: cosmos.id
+  }
+}
+
+// ---------- Diagnostics -> central workspace (KV audit, Cosmos DB logs, Blob/Queue data-plane logs) ----------
 resource kvDiag 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = {
   name: 'to-log-analytics'
   scope: kvApp
@@ -239,13 +267,13 @@ resource kvDiag 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = {
   }
 }
 
-resource pgDiag 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = {
+resource cosmosDiag 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = {
   name: 'to-log-analytics'
-  scope: postgres
+  scope: cosmos
   properties: {
     workspaceId: logAnalyticsWorkspaceId
-    logs: [{ categoryGroup: 'allLogs', enabled: true }]
-    metrics: [{ category: 'AllMetrics', enabled: true }]
+    logs: [{ categoryGroup: 'allLogs', enabled: true }] // DataPlaneRequests, QueryRuntimeStatistics, etc.
+    metrics: [{ category: 'Requests', enabled: true }]
   }
 }
 
@@ -358,15 +386,14 @@ resource raEgTopicQueue 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
 }
 
 // Env shared by the app and the ingestion Job — both run as the UAMI and reach APIM, Search and
-// Postgres the same keyless way. Kept in one place so the two containers never drift apart.
+// Cosmos DB the same keyless way. Kept in one place so the two containers never drift apart.
 var sharedEnv = [
   { name: 'AZURE_CLIENT_ID', value: uamiClientId } // pick THIS MI for DefaultAzureCredential
   { name: 'APIM_BASE_URL', value: '${apimGatewayUrl}/ai/v1' }
   { name: 'APIM_KEY', secretRef: 'apim-subscription-key' }
   { name: 'SEARCH_ENDPOINT', value: searchEndpoint }
-  { name: 'PG_HOST', value: postgres.properties.fullyQualifiedDomainName }
-  { name: 'PG_USER', value: uamiName }
-  { name: 'PG_DB', value: 'ragchat' }
+  { name: 'COSMOS_ENDPOINT', value: cosmos.properties.documentEndpoint }
+  { name: 'COSMOS_DB', value: cosmosDb.name }
   { name: 'APPLICATIONINSIGHTS_CONNECTION_STRING', value: appInsights.properties.ConnectionString }
   { name: 'LANGUAGE_ENDPOINT', value: languageEndpoint } // PII-scrub trace content before it reaches App Insights
   { name: 'EMBED_MODEL', value: 'text-embedding-3-large' }
@@ -433,7 +460,7 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = {
       scale: { minReplicas: 1, maxReplicas: 3 }
     }
   }
-  dependsOn: [raAppKvApp, raAppAcr, pgAadAdmin, secretApimKey]
+  dependsOn: [raAppKvApp, raAppAcr, raAppCosmos, messagesContainer, secretApimKey]
 }
 
 // ---------- Ingestion Job — the WRITE path: pull from Blob, Docling-parse + chunk, embed via APIM,
@@ -505,15 +532,16 @@ resource ingestJob 'Microsoft.App/jobs@2024-10-02-preview' = {
       ]
     }
   }
-  dependsOn: [raAppKvApp, raAppAcr, raAppStorage, raAppQueue, pgAadAdmin, secretApimKey]
+  dependsOn: [raAppKvApp, raAppAcr, raAppStorage, raAppQueue, raAppCosmos, stateContainer, secretApimKey]
 }
 
 output appFqdn string = app.properties.configuration.ingress.fqdn
 output containerAppName string = app.name
 output acrName string = acr.name
 output acrLoginServer string = acr.properties.loginServer
-output pgHost string = postgres.properties.fullyQualifiedDomainName
-output pgDb string = pgDb.name
+output cosmosEndpoint string = cosmos.properties.documentEndpoint
+output cosmosAccountName string = cosmos.name
+output cosmosDbName string = cosmosDb.name
 output kvAppName string = kvApp.name
 output appInsightsName string = appInsights.name
 output storageAccountName string = storage.name

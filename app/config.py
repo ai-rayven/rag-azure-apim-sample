@@ -17,9 +17,8 @@ class Settings(BaseSettings):
     search_index: str = "ragchat-docs"
     search_api_version: str = "2024-07-01"
 
-    pg_host: str
-    pg_db: str
-    pg_user: str
+    cosmos_endpoint: str
+    cosmos_db: str = "ragchat"
 
     embed_model: str = "text-embedding-3-large"
     chat_model: str = "gpt-5-mini"

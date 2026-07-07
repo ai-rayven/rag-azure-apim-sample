@@ -1,7 +1,6 @@
 import json
 import uuid
 from collections.abc import Iterator
-from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -16,19 +15,13 @@ from services.search import SearchIndex
 from telemetry import record_content, setup_telemetry
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    """Run one-time startup work: ensure the history schema exists (the app is its Entra admin)."""
-    history.migrate()
-    yield
-
 history = HistoryStore()
 embedder = Embedder()
 chat_service = ChatService(history)
 index = SearchIndex()
 
 tracer = setup_telemetry("rag-chatbot")
-app = FastAPI(title="RAG Chatbot Sample", lifespan=lifespan)
+app = FastAPI(title="RAG Chatbot Sample")
 FastAPIInstrumentor().instrument_app(app)
 
 app.mount("/static", StaticFiles(directory="static"), name="static")

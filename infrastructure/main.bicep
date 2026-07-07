@@ -20,7 +20,7 @@ param environmentName string = baseName
 @description('Resource group for the edge/gateway tier (APIM, gateway observability).')
 param networkingRgName string = 'rg-ragchat-networking'
 
-@description('Resource group for the application tier (container, Postgres, ACR, kv-app, primary observability).')
+@description('Resource group for the application tier (container, Cosmos DB, ACR, kv-app, primary observability).')
 param appRgName string = 'rg-ragchat-app'
 
 @description('Resource group for the model/data-plane tier (Foundry, AI Search).')
@@ -164,7 +164,7 @@ module apimAi 'modules/apim-ai.bicep' = {
 }
 
 // ============================================================================
-// app — the container (runs as the UAMI), Postgres, ACR, kv-app, primary observability.
+// app — the container (runs as the UAMI), Cosmos DB, ACR, kv-app, primary observability.
 // ============================================================================
 module app 'modules/app.bicep' = {
   scope: rgApp
@@ -173,11 +173,9 @@ module app 'modules/app.bicep' = {
     location: location
     prefix: prefix
     tags: tags
-    tenantId: subscription().tenantId
     uamiId: identity.outputs.id
     uamiPrincipalId: identity.outputs.principalId
     uamiClientId: identity.outputs.clientId
-    uamiName: identity.outputs.name
     apimGatewayUrl: networking.outputs.gatewayUrl
     searchEndpoint: ai.outputs.searchEndpoint // implicitly waits for ai (incl. Search RBAC)
     languageEndpoint: ai.outputs.languageEndpoint // Foundry account, reused for PII scrubbing (keyless)
@@ -255,9 +253,10 @@ output LANGUAGE_ENDPOINT string = ai.outputs.languageEndpoint // Azure AI Langua
 output STORAGE_ACCOUNT string = app.outputs.storageAccountName // upload source docs here for ingestion
 output BLOB_CONTAINER string = app.outputs.blobContainerName
 output INGEST_JOB_NAME string = app.outputs.ingestJobName // `az containerapp job start -n <this>`
-output PG_HOST string = app.outputs.pgHost
-output PG_DB string = app.outputs.pgDb
-output UAMI_NAME string = identity.outputs.name // = the app's Postgres login name (PG_USER)
+output COSMOS_ENDPOINT string = app.outputs.cosmosEndpoint
+output COSMOS_DB string = app.outputs.cosmosDbName
+output COSMOS_ACCOUNT string = app.outputs.cosmosAccountName // Data Explorer: portal.azure.com -> this account
+output UAMI_NAME string = identity.outputs.name
 output KV_APP_NAME string = app.outputs.kvAppName // vault holding the APIM key; the local-.env step reads it via this name
 output APP_INSIGHTS_NAME string = app.outputs.appInsightsName
 output GATEWAY_APP_INSIGHTS_NAME string = networking.outputs.appInsightsName
