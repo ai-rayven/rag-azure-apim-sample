@@ -34,7 +34,6 @@ def drain() -> int:
     except ResourceNotFoundError:
         return drained
 
-
 def should_skip_doc(doc: SourceDoc, digest: str, known: dict[str, dict]) -> bool:
     return doc.id in known and known[doc.id]["hash"] == digest
 
@@ -46,7 +45,6 @@ def create_index_records(doc: SourceDoc, parsed: ParsedDoc, embedder: Embedder) 
         for j, (chunk, vector) in enumerate(zip(batch, vectors)):
             records.append(IndexRecord.from_chunk(doc, start + j, chunk, parsed.title, vector))
     return records
-
 
 def run(source: Source, processor: DocumentProcessor, embedder: Embedder,
         index: SearchIndex, state: IngestionStateStore) -> dict:
@@ -98,7 +96,6 @@ def run(source: Source, processor: DocumentProcessor, embedder: Embedder,
         stats["pruned_docs"] = len(gone)
 
     return stats
-
 
 def main() -> None:
     drained = drain()

@@ -45,8 +45,7 @@ class ChatService:
         whole turn.
         """
         messages = self._prepare(session_id, message, hits)
-        # stream=True turns the call into SSE (relayed untouched through the APIM gateway);
-        # include_usage adds a final usage-only chunk so we still get token counts for telemetry.
+
         stream = self._client.chat.completions.create(
             model=settings.chat_model,
             messages=messages,
@@ -82,9 +81,7 @@ class ChatService:
             *history,
             {"role": "user", "content": f"Context:\n{context}\n\nQuestion: {message}"},
         ]
-        # Capture the prompt decomposed so only the user's own text is PII-scrubbed (in the exporter).
-        # The system prompt, retrieved context (your documents — de-identify those at ingestion), and
-        # prior history are exported as-is.
+
         record_content(
             "gen_ai.content.prompt",
             {"system_prompt": self.system_prompt, "history": history,

@@ -7,7 +7,7 @@ from config import settings
 from domain import IndexRecord
 
 
-class _EntraAuth(httpx.Auth):
+class AzureEntraAuth(httpx.Auth):
     def __init__(self, cred: DefaultAzureCredential) -> None:
         self._cred = cred
         self._scope = "https://search.azure.com/.default"
@@ -16,14 +16,13 @@ class _EntraAuth(httpx.Auth):
         request.headers["Authorization"] = f"Bearer {self._cred.get_token(self._scope).token}"
         yield request
 
-
 class SearchIndex:
     def __init__(self) -> None:
         self._path = f"/indexes/{settings.search_index}"
         self._client = httpx.Client(
             base_url=settings.search_endpoint,
             params={"api-version": settings.search_api_version},
-            auth=_EntraAuth(DefaultAzureCredential()),
+            auth=AzureEntraAuth(DefaultAzureCredential()),
         )
 
     def ensure(self, dimensions: int) -> None:

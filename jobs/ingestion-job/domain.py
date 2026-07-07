@@ -68,14 +68,7 @@ class ParsedDoc:
 
 @dataclass
 class IndexRecord:
-    """One record written to the search index: a chunk's text and vector plus retrieval metadata.
-
-    The metadata carries what retrieval filters and citations need. ``section`` is the real section a
-    passage came from (Docling's heading-path), not just an ordinal. ``id`` hashes the parent id and
-    suffixes the chunk number, so a doc's chunks share a stable, derivable prefix used for targeted
-    deletes — Azure Search keys may contain only letters, digits, ``_``, ``-``, ``=``. To carry more,
-    add a field here and a matching field to the index schema in ``services/index.py``.
-    """
+    """One record written to the search index: a chunk's text and vector plus retrieval metadata. """
 
     id: str
     parent_id: str
