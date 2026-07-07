@@ -11,6 +11,9 @@ param foundryEndpoint string
 @secure()
 param apimSubscriptionKey string
 
+@description('Token streaming toggle.')
+param enableStreaming bool
+
 resource apim 'Microsoft.ApiManagement/service@2024-06-01-preview' existing = { name: apimName }
 resource appInsights 'Microsoft.Insights/components@2020-02-02' existing = { name: gatewayAppInsightsName }
 
@@ -81,7 +84,12 @@ resource opEmbed 'Microsoft.ApiManagement/service/apis/operations@2024-06-01-pre
 // The request's `model` field names the Foundry deployment; the URI is rewritten to the Azure
 // OpenAI shape and authenticated with APIM's managed identity (no key). Re-add a <choose> here to
 // fan out to third-party providers by model-name prefix.
-var policyXml = '''
+// buffer-response=false relays SSE chunks to the client as they arrive so token streaming (stream:true)
+// isn't held back until the whole completion is ready; when streaming is off we inherit the default
+// buffered backend. `{BACKEND}` is substituted below (multi-line strings don't support interpolation).
+var backendPolicy = enableStreaming ? '<forward-request buffer-response="false" />' : '<base />'
+
+var policyTemplate = '''
 <policies>
   <inbound>
     <base />
@@ -97,7 +105,7 @@ var policyXml = '''
     }" />
     <authentication-managed-identity resource="https://cognitiveservices.azure.com" />
   </inbound>
-  <backend><base /></backend>
+  <backend>{BACKEND}</backend>
   <outbound><base /></outbound>
   <on-error><base /></on-error>
 </policies>
@@ -108,7 +116,7 @@ resource apiPolicy 'Microsoft.ApiManagement/service/apis/policies@2024-06-01-pre
   name: 'policy'
   properties: {
     format: 'rawxml'
-    value: policyXml
+    value: replace(policyTemplate, '{BACKEND}', backendPolicy)
   }
   dependsOn: [opChat, opEmbed, beFoundry]
 }

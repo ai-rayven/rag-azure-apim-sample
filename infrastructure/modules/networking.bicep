@@ -15,6 +15,9 @@ param publisherEmail string
 @description('Resource ID of the central Log Analytics workspace (from rg-monitoring). Gateway App Insights and APIM diagnostics both flow here.')
 param logAnalyticsWorkspaceId string
 
+@description('Token streaming toggle')
+param enableStreaming bool
+
 // ---------- Gateway-tier App Insights (break-glass, separate component from the app's; shared workspace) ----------
 resource appInsights 'Microsoft.Insights/components@2020-02-02' = {
   name: 'appi-net-${prefix}'
@@ -31,7 +34,8 @@ resource apim 'Microsoft.ApiManagement/service@2024-06-01-preview' = {
   name: 'apim-${prefix}'
   location: location
   tags: tags
-  sku: { name: 'Consumption', capacity: 0 }
+  // Developer supports the long-running connections SSE/token streaming needs; Consumption does not.
+  sku: enableStreaming ? { name: 'Developer', capacity: 1 } : { name: 'Consumption', capacity: 0 }
   identity: { type: 'SystemAssigned' }
   properties: {
     publisherEmail: publisherEmail

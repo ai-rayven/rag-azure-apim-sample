@@ -53,7 +53,7 @@ azd env get-values > .env
 echo "APIM_KEY=$(az keyvault secret show --vault-name $(azd env get-value KV_APP_NAME) \
   --name apim-subscription-key --query value -o tsv)" >> .env
 cd app       && uv run uvicorn main:app --reload
-cd ingestion && uv run python -m main
+cd jobs/ingestion-job && uv run python -m main
 ```
 
 Locally you run as *you*: Blob works, but Search and Postgres are locked to the app's managed identity —

@@ -40,11 +40,14 @@ param apimSubscriptionKey string
 @description('Container image. Provision uses the public placeholder; `azd deploy` builds + updates it.')
 param appImage string
 
-@description('Container image for the ingestion Job. Placeholder until you build ./ingestion; the Job is event-triggered by blob drops, so the placeholder never runs.')
+@description('Container image for the ingestion Job. Placeholder until you build ./jobs/ingestion-job; the Job is event-triggered by blob drops, so the placeholder never runs.')
 param ingestImage string
 
 @description('Built-in role definition GUIDs, keyed by role name.')
 param roles Roles
+
+@description('Token streaming toggle')
+param enableStreaming bool
 
 @description('Resource ID of the central Log Analytics workspace (from rg-monitoring). Consuming it as a param is also what orders this module AFTER monitoring.')
 param logAnalyticsWorkspaceId string
@@ -422,6 +425,7 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = {
           resources: { cpu: json('0.5'), memory: '1Gi' }
           env: concat(sharedEnv, [
             { name: 'CHAT_MODEL', value: 'gpt-5-mini' }
+            { name: 'ENABLE_STREAMING', value: string(enableStreaming) } // must match the APIM SKU (main.bicep sets both)
             { name: 'OTEL_SERVICE_NAME', value: 'rag-app' } // App Insights cloud role name (read path)
           ])
         }

@@ -33,10 +33,13 @@ param monitoringRgName string = 'rg-ragchat-monitoring'
 @secure()
 param apimSubscriptionKey string = newGuid()
 
+@description('Token streaming toggle')
+param enableStreaming bool = true
+
 @description('Container image for the app. Provision uses the public placeholder; `azd deploy` then builds the image in ACR and updates the running container — you never set this by hand.')
 param appImage string = 'mcr.microsoft.com/k8se/quickstart:latest'
 
-@description('Container image for the ingestion Job. Placeholder at provision; `azd deploy` builds ./ingestion in ACR and updates the Job. The Job is event-triggered by blob drops, so the placeholder is never run (no documents exist until you deploy + seed).')
+@description('Container image for the ingestion Job. Placeholder at provision; `azd deploy` builds ./jobs/ingestion-job in ACR and updates the Job. The Job is event-triggered by blob drops, so the placeholder is never run (no documents exist until you deploy + seed).')
 param ingestImage string = 'mcr.microsoft.com/k8se/quickstart:latest'
 
 var prefix = '${baseName}${uniqueString(subscription().id, baseName)}'
@@ -123,6 +126,7 @@ module networking 'modules/networking.bicep' = {
     tags: tags
     publisherEmail: publisherEmail
     logAnalyticsWorkspaceId: monitoring.outputs.workspaceId
+    enableStreaming: enableStreaming 
   }
 }
 
@@ -155,6 +159,7 @@ module apimAi 'modules/apim-ai.bicep' = {
     gatewayAppInsightsName: networking.outputs.appInsightsName
     foundryEndpoint: ai.outputs.foundryEndpoint
     apimSubscriptionKey: apimSubscriptionKey
+    enableStreaming: enableStreaming // buffer-response=false on the backend when streaming
   }
 }
 
@@ -180,6 +185,7 @@ module app 'modules/app.bicep' = {
     appImage: appImage
     ingestImage: ingestImage
     roles: roles
+    enableStreaming: enableStreaming
     logAnalyticsWorkspaceId: monitoring.outputs.workspaceId
     monitoringRgName: monitoringRgName
   }

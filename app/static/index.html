@@ -76,21 +76,20 @@
   const input = document.getElementById("input");
   const send = document.getElementById("send");
 
-  function add(role, text, meta) {
+  // Returns the bubble + meta elements so the caller can stream text into them and fill meta at the end.
+  function add(role, text) {
     const m = document.createElement("div");
     m.className = "msg " + role;
     const b = document.createElement("div");
     b.className = "bubble";
     b.textContent = text;
     m.appendChild(b);
-    if (meta) {
-      const d = document.createElement("div");
-      d.className = "meta";
-      d.innerHTML = meta;
-      m.appendChild(d);
-    }
+    const d = document.createElement("div");
+    d.className = "meta";
+    m.appendChild(d);
     messages.appendChild(m);
     messages.scrollTop = messages.scrollHeight;
+    return { bubble: b, meta: d };
   }
 
   form.addEventListener("submit", async (e) => {
@@ -100,20 +99,58 @@
     add("user", q);
     input.value = "";
     send.disabled = true;
+    const { bubble, meta } = add("assistant", "");
     try {
       const r = await fetch("/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ message: q, session_id: sessionId }),
       });
-      const data = await r.json();
-      sessionId = data.session_id;
-      document.getElementById("session").textContent = "session " + sessionId.slice(0, 8);
-      // trace_id shown on purpose: the demo is "copy this, find the same trace in App Insights".
-      add("assistant", data.answer,
-        `<span class="sources">sources: ${data.sources.join(", ") || "none"}</span><br>trace_id: ${data.trace_id}`);
+      if (!r.ok) throw new Error("HTTP " + r.status);
+
+      // Non-streaming mode (ENABLE_STREAMING off): the server answers with one JSON blob.
+      if (!(r.headers.get("content-type") || "").includes("text/event-stream")) {
+        const data = await r.json();
+        sessionId = data.session_id;
+        document.getElementById("session").textContent = "session " + sessionId.slice(0, 8);
+        bubble.textContent = data.answer;
+        meta.innerHTML =
+          `<span class="sources">sources: ${data.sources.join(", ") || "none"}</span><br>trace_id: ${data.trace_id}`;
+        return;
+      }
+
+      // Streaming mode: parse the SSE stream — events are separated by a blank line; each token appends.
+      const reader = r.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        let sep;
+        while ((sep = buffer.indexOf("\n\n")) !== -1) {
+          const raw = buffer.slice(0, sep);
+          buffer = buffer.slice(sep + 2);
+          let event = "message", data = "";
+          for (const line of raw.split("\n")) {
+            if (line.startsWith("event:")) event = line.slice(6).trim();
+            else if (line.startsWith("data:")) data += line.slice(5).trim();
+          }
+          const payload = data ? JSON.parse(data) : null;
+          if (event === "meta") {
+            sessionId = payload.session_id;
+            document.getElementById("session").textContent = "session " + sessionId.slice(0, 8);
+            // trace_id shown on purpose: the demo is "copy this, find the same trace in App Insights".
+            meta.innerHTML =
+              `<span class="sources">sources: ${payload.sources.join(", ") || "none"}</span><br>trace_id: ${payload.trace_id}`;
+          } else if (event === "token") {
+            bubble.textContent += payload;
+            messages.scrollTop = messages.scrollHeight;
+          }
+        }
+      }
     } catch (err) {
-      add("assistant", "Request failed: " + err.message);
+      bubble.textContent = bubble.textContent || ("Request failed: " + err.message);
     } finally {
       send.disabled = false;
       input.focus();

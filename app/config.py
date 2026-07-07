@@ -24,6 +24,11 @@ class Settings(BaseSettings):
     embed_model: str = "text-embedding-3-large"
     chat_model: str = "gpt-5-mini"
 
+    # Stream the chat answer token-by-token over SSE. Must stay in lockstep with the APIM SKU the
+    # infra provisions (Developer/v2 tiers can hold the long-lived streaming connection; Consumption
+    # cannot) — the bicep ENABLE_STREAMING param sets both this env var and the SKU together.
+    enable_streaming: bool = True
+
     applicationinsights_connection_string: str | None = None
 
     # Azure AI Language endpoint used to PII-scrub the user's message before it's exported to App
