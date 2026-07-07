@@ -1,7 +1,7 @@
 # yaml-language-server: $schema=https://raw.githubusercontent.com/Azure/azure-dev/main/schemas/v1.0/azure.yaml.json
 #
 # Azure Developer CLI (azd) project manifest — the single entrypoint for provision + deploy.
-#   azd env new ragchat      # create an environment (keeps baseName=ragchat -> adopts existing resources)
+#   azd env new ragchat      # create an environment
 #   azd env set SEARCH_LOCATION eastus
 #   azd up                   # provision (bicep) + build/push images (ACR) + deploy to ca-/caj-
 #   azd down --purge         # tear down, incl. soft-delete purge of APIM / OpenAI / Key Vault
@@ -33,7 +33,7 @@ services:
     resourceGroup: ${AZURE_RESOURCE_GROUP}   # rgApp — ca-/caj- both live here
     docker:
       path: ./Dockerfile
-      remoteBuild: true     # build in ACR (matches the old `az acr build`; no local Docker daemon)
+      remoteBuild: true     # build in ACR (no local Docker daemon)
 
   ingestion:
     project: ./jobs/ingestion-job
