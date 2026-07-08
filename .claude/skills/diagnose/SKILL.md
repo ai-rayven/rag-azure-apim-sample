@@ -19,11 +19,14 @@ one central **Log Analytics workspace** in `rg-ragchat-monitoring`. Three tables
 |-------|-------|----------|
 | `AppRequests` | server: the `chat` root **and** APIM gateway ops | did it fail / how slow, per tier |
 | `AppDependencies` | client: `retrieve`, `llm-call`, httpx → APIM | token usage, downstream calls |
-| `AppTraces` | `gen_ai.content.*` events (prompt / context / completion) | what was asked & answered |
+| `AppTraces` | `gen_ai.content.retrieval` event (which docs were retrieved) | was retrieval on-topic |
 
-`scripts/telemetry.py` covers the first two (health + span tree). Content lives in `AppTraces` and
-is read with KQL (step 4). `user_message` is PII-scrubbed; everything else is verbatim. Full
-reference: `docs/observability.md`.
+`scripts/telemetry.py` covers the first two (health + span tree). The only content in `AppTraces` is
+the retrieved corpus docs (non-PII) — read with KQL (step 4). **Conversation content (the user's
+message, the model's answer, history) is NOT in telemetry** — it lives only in the Cosmos DB
+`messages` container, stored with each turn's `trace_id`. To read what was actually asked/answered
+for a trace, query Cosmos by `trace_id` (or `session_id`), not App Insights. Full reference:
+`docs/observability.md`.
 
 Keyless: queries run under the caller's `az login` identity (needs `Reader` on the workspace) and
 resolve the workspace from the selected azd env — no names to paste.

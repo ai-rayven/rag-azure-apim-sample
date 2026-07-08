@@ -2,7 +2,6 @@
 @description('Built-in Azure role definition GUIDs, keyed by role name. Assembled in main.bicep and threaded to the modules that author role assignments (ai, app).')
 type Roles = {
   cognitiveOpenAiUser: string
-  cognitiveServicesUser: string
   keyVaultSecretsUser: string
   searchIndexDataContributor: string
   searchServiceContributor: string

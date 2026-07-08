@@ -25,8 +25,6 @@ class Settings(BaseSettings):
 
     applicationinsights_connection_string: str | None = None
 
-    language_endpoint: str
-
     enable_streaming: bool = True
 
     @field_validator("search_endpoint")

@@ -6,7 +6,6 @@ from openai import OpenAI
 from config import settings
 from domain import Completion, Hit
 from services.history import HistoryStore
-from telemetry import record_content
 
 
 class ChatService:
@@ -40,9 +39,8 @@ class ChatService:
         """Streaming turn: yield each content delta as it arrives.
 
         The generator's *return value* (captured via `StopIteration.value`) is the finished
-        `Completion` — full answer plus token usage from the stream's final chunk. Persistence and
-        completion-content capture run once the stream drains, so history + telemetry still see the
-        whole turn.
+        `Completion` — full answer plus token usage from the stream's final chunk. Persistence runs
+        once the stream drains, so the Cosmos history still records the whole turn.
         """
         messages = self._prepare(session_id, message, hits)
 
@@ -73,25 +71,16 @@ class ChatService:
         return completion
 
     def _prepare(self, session_id: str, message: str, hits: list[Hit]) -> list[dict]:
-        """Build the message list and record the (decomposed, PII-marked) prompt. Shared by both paths."""
+        """Build the message list. Shared by both paths."""
         history = self._history.load(session_id)
         context = "\n\n".join(f"[{h.title}]\n{h.content}" for h in hits)
-        messages = [
+        return [
             {"role": "system", "content": self.system_prompt},
             *history,
             {"role": "user", "content": f"Context:\n{context}\n\nQuestion: {message}"},
         ]
 
-        record_content(
-            "gen_ai.content.prompt",
-            {"system_prompt": self.system_prompt, "history": history,
-             "context": context, "user_message": message},
-            scrub=("user_message",),
-        )
-        return messages
-
     def _finish(self, session_id: str, message: str, trace_id: str, completion: Completion) -> None:
-        """Record the completion content and persist the turn. Shared by both paths."""
-        record_content("gen_ai.content.completion", completion.answer)
+        """Persist the turn to Cosmos. Shared by both paths."""
         self._history.save(session_id, "user", message, trace_id)
         self._history.save(session_id, "assistant", completion.answer, trace_id)

@@ -66,9 +66,9 @@ union AppRequests, AppDependencies
 
 `Id` / `ParentId` rebuild the span tree: root `chat` → `retrieve` / `llm-call` → the APIM operations.
 
-### The content for one trace ID (redacted)
+### The content for one trace ID
 
-The prompt, retrieved docs, and completion are `gen_ai.content.*` span events, so they land in `AppTraces` with the payload in the `Properties.content` custom dimension:
+The only content exported to telemetry is the **retrieved docs** — a `gen_ai.content.retrieval` span event that lands in `AppTraces` with the payload in the `Properties.content` custom dimension:
 
 ```kql
 let tid = "171b4070efa1aeaf4b52d8750fb6bdf6";
@@ -78,19 +78,14 @@ AppTraces
 | order by TimeGenerated asc
 ```
 
-The `gen_ai.content.prompt` event is a JSON object — `{system_prompt, history, context, user_message}` — where **only `user_message`** is de-identified (PII replaced by realistic random stand-ins via the `syntheticReplacement` policy: `John Smith` → `Sam Johnson`). The other keys, and the `retrieval` and `completion` events, are the verbatim text.
-
 ## How content is secured
 
-The one bit of content this app can't predict is what the user types, so that's what it scrubs. **Only the user's own message is de-identified**; everything else in the trace is exported as-is.
+**App Insights holds zero conversation content.** The user's message, the model's answer, and the prior history all carry PII/PHI, so none of them are exported to telemetry — the only `gen_ai.content.*` event is `retrieval`, which is your own PII-free corpus.
 
-- **What's scrubbed:** the `user_message` field of the prompt event. `record_content(payload, scrub=("user_message",))` marks it, and `RedactingSpanExporter` scrubs just that field in the exporter, re-serializing the rest of the payload verbatim.
-- **Azure AI Language — PII detection (NER),** the `syntheticReplacement` policy: each detected entity is swapped for a realistic random stand-in (`John Smith` → `Sam Johnson`) rather than masked to `****`, so traces stay readable. Keyless — the app calls `/language/:analyze-text` with an Entra token from its managed identity (`Cognitive Services User` on the Foundry account, a multi-service `AIServices` resource that also serves Language). Set by `LANGUAGE_ENDPOINT`. It's a **preview** policy, so `app/telemetry.py` pins the preview API version (`2025-11-15-preview`).
-- **Fail closed.** If the Language call can't run — throttle, outage, over-length, or `LANGUAGE_ENDPOINT` unset — the `user_message` is **withheld** (`[content withheld: PII redaction unavailable]`), never exported raw.
-- **What's NOT scrubbed — and why it's still OK:**
-  - *Retrieved documents / `context`* — this is **your own corpus**. De-identify it once, at **ingestion** (before indexing), not on every chat turn. Until you add that, retrieved-doc PII reaches the workspace as-is.
-  - *`completion`* — the model's answer can echo the user's input or document PII; it's exported as-is today.
-  - *`history`* — prior user turns live here and aren't scrubbed (they're already stored raw in the Cosmos DB `messages` container).
+- **The system of record for conversation content is Cosmos DB** (the `messages` container, `services/history.py`). Each turn is stored with its `trace_id`, so a trace in App Insights is still joinable back to the exact raw exchange — you look it up in Cosmos, keyed by `trace_id` / `session_id`, rather than reading it from the observability plane. This keeps PII in one access-controlled store (keyless, local-auth disabled) instead of scattered across telemetry.
+- **What IS in telemetry:** the span tree, latency, token usage (`gen_ai.usage.*`), status, `session.id`, and the `retrieval` content (doc titles/text). No user- or model-authored free text.
+- **Retrieved documents / `context`** are exported as-is — this is **your own corpus**, so de-identify it once at **ingestion** (before indexing), not per chat turn.
+- **To inspect what a user asked / what the bot answered**, join a trace to Cosmos by `trace_id`. `record_content` is deliberately non-PII only (see `app/telemetry.py`); there is no PII-redaction step in the export path.
 
   So treat the workspace itself as sensitive: **RBAC** (Reader / table-level access on `AppTraces`), **short retention**, and the **Purge API** — see below.
 

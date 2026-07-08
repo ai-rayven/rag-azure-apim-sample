@@ -51,10 +51,11 @@ grants the deployer the Cosmos data-plane role for portal access, so that one yo
 
 # Debugging
 
-Every chat turn runs under one W3C trace exported to App Insights (Log Analytics) — timings/tokens
-plus the prompt, retrieved context, and completion. The **user's own message** is PII-scrubbed by
-Azure AI Language before it leaves the app (fail closed — withheld if the scrub can't run); your own
-documents are meant to be de-identified at ingestion, not here.
+Every chat turn runs under one W3C trace exported to App Insights (Log Analytics) — timings/tokens,
+the span tree, and the retrieved context. **No conversation content is sent to telemetry:** the
+user's message, the model's answer, and prior history all carry PII/PHI, so they live only in the
+Cosmos DB history (stored with each turn's `trace_id`, so a trace still joins back to the raw
+exchange). Your own retrieved documents are meant to be de-identified at ingestion, not here.
 
 ```bash
 uv run scripts/telemetry.py                  # health overview (errors, latency p50/p95, tokens) — last 1h
