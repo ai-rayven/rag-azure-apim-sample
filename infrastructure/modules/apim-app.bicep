@@ -51,5 +51,15 @@ resource opChat 'Microsoft.ApiManagement/service/apis/operations@2024-06-01-prev
   }
 }
 
+resource opModels 'Microsoft.ApiManagement/service/apis/operations@2024-06-01-preview' = {
+  parent: api
+  name: 'models'
+  properties: {
+    displayName: 'Model picker options'
+    method: 'GET'
+    urlTemplate: '/models' // the UI fetches this on load to populate the model dropdown
+  }
+}
+
 // No /ingest operation: ingestion is a Container Apps Job (the WRITE path), not an HTTP endpoint on
-// the app. The app-ingress API only exposes what the browser calls — the UI, its assets, and /chat.
+// the app. The app-ingress API only exposes what the browser calls — the UI, its assets, /chat, /models.
