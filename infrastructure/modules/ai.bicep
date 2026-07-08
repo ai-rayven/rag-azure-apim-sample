@@ -57,9 +57,9 @@ resource foundry 'Microsoft.CognitiveServices/accounts@2024-10-01' = {
 resource chatDeployments 'Microsoft.CognitiveServices/accounts/deployments@2024-10-01' = [for m in chatModels: {
   parent: foundry
   name: m.name
-  sku: { name: 'GlobalStandard', capacity: 10 }
+  sku: { name: 'GlobalStandard', capacity: m.?capacity ?? 10 } // OpenAI: 10; MaaS partner models: 1
   properties: {
-    model: { format: 'OpenAI', name: m.name, version: m.version }
+    model: { format: m.?format ?? 'OpenAI', name: m.name, version: m.version }
   }
 }]
 

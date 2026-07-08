@@ -42,6 +42,7 @@ param enableStreaming bool = true
 param chatModels ChatModel[] = [
   { name: 'gpt-5-mini', version: '2025-08-07' }
   { name: 'gpt-4.1-nano', version: '2025-04-14' } // fast, non-reasoning — a visible contrast to gpt-5-mini
+  { name: 'Mistral-Large-3', version: '1', format: 'Mistral AI', capacity: 1 } // non-OpenAI provider, same gateway/route/key
 ]
 
 @description('Container image for the app. Provision uses the public placeholder; `azd deploy` then builds the image in ACR and updates the running container — you never set this by hand.')
