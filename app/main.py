@@ -50,6 +50,21 @@ def _set_llm_attrs(span, completion) -> None:
     span.set_attribute("gen_ai.usage.output_tokens", completion.output_tokens)
 
 
+def _pick_model(req: ChatRequest) -> str:
+    """Resolve the picker selection to an allowed model name.
+
+    The chosen name is sent to the gateway as the request body's `model` (what APIM routes on), so we
+    never forward an arbitrary client string — anything not on the allowlist falls back to the default.
+    """
+    return req.model if req.model in settings.chat_model_options else settings.default_chat_model
+
+
+@app.get("/models")
+def models():
+    """Picker options + default, so the UI's dropdown stays in sync with the deployed models (config)."""
+    return {"models": settings.chat_model_options, "default": settings.default_chat_model}
+
+
 @app.post("/chat")
 def chat(req: ChatRequest):
     """Answer one chat turn, RAG-style, under a single trace.
@@ -58,23 +73,24 @@ def chat(req: ChatRequest):
     JSON blob (the gateway is then on a tier that can't hold a long-lived streaming connection).
     """
     session_id = req.session_id or str(uuid.uuid4())
+    model = _pick_model(req)
 
     if settings.enable_streaming:
-        return StreamingResponse(_chat_stream(req, session_id), media_type="text/event-stream")
+        return StreamingResponse(_chat_stream(req, session_id, model), media_type="text/event-stream")
 
     with tracer.start_as_current_span("chat") as root:
         root.set_attribute("session.id", session_id)
         trace_id = format(root.get_span_context().trace_id, "032x")
         hits = _retrieve(req.message)
         with tracer.start_as_current_span("llm-call") as span:
-            completion = chat_service.respond(session_id, req.message, hits, trace_id)
+            completion = chat_service.respond(session_id, req.message, hits, trace_id, model)
             _set_llm_attrs(span, completion)
 
     return {"answer": completion.answer, "trace_id": trace_id, "session_id": session_id,
-            "sources": [h.title for h in hits]}
+            "sources": [h.title for h in hits], "model": completion.model}
 
 
-def _chat_stream(req: ChatRequest, session_id: str) -> Iterator[str]:
+def _chat_stream(req: ChatRequest, session_id: str, model: str) -> Iterator[str]:
     """SSE body: leading `meta` event, then one `token` event per delta, then `done`.
 
     The trace spans live inside this generator, not the handler, so they stay open for the whole
@@ -85,12 +101,12 @@ def _chat_stream(req: ChatRequest, session_id: str) -> Iterator[str]:
         trace_id = format(root.get_span_context().trace_id, "032x")
         hits = _retrieve(req.message)
 
-        # Lead with the metadata the UI needs before any token arrives.
+        # Lead with the metadata the UI needs before any token arrives (incl. which model is answering).
         yield _sse("meta", {"session_id": session_id, "trace_id": trace_id,
-                            "sources": [h.title for h in hits]})
+                            "sources": [h.title for h in hits], "model": model})
 
         with tracer.start_as_current_span("llm-call") as span:
-            stream = chat_service.respond_stream(session_id, req.message, hits, trace_id)
+            stream = chat_service.respond_stream(session_id, req.message, hits, trace_id, model)
             while True:
                 try:
                     yield _sse("token", next(stream))

@@ -1,5 +1,7 @@
 targetScope = 'subscription'
 
+import { ChatModel } from './types.bicep'
+
 @description('APIM publisher email (any address you own).')
 param publisherEmail string
 
@@ -35,6 +37,12 @@ param apimSubscriptionKey string = newGuid()
 
 @description('Token streaming toggle')
 param enableStreaming bool = true
+
+@description('Chat models offered in the app picker. SINGLE SOURCE OF TRUTH: `ai` creates a Foundry deployment for each entry, and `app` derives the CHAT_MODELS env var (CSV of names) from this same list — the two can never drift. The first entry is the default selection. To offer another model, add `{ name, version }` here; the APIM route is untouched (it routes on the request body `model`).')
+param chatModels ChatModel[] = [
+  { name: 'gpt-5-mini', version: '2025-08-07' }
+  { name: 'gpt-4o-mini', version: '2024-07-18' } // fast, non-reasoning — a visible contrast to gpt-5-mini
+]
 
 @description('Container image for the app. Provision uses the public placeholder; `azd deploy` then builds the image in ACR and updates the running container — you never set this by hand.')
 param appImage string = 'mcr.microsoft.com/k8se/quickstart:latest'
@@ -144,6 +152,7 @@ module ai 'modules/ai.bicep' = {
     apimPrincipalId: networking.outputs.apimPrincipalId
     roles: roles
     logAnalyticsWorkspaceId: monitoring.outputs.workspaceId
+    chatModels: chatModels
   }
 }
 
@@ -184,6 +193,7 @@ module app 'modules/app.bicep' = {
     enableStreaming: enableStreaming
     logAnalyticsWorkspaceId: monitoring.outputs.workspaceId
     monitoringRgName: monitoringRgName
+    chatModels: chatModels
   }
 }
 

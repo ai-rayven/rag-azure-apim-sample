@@ -5,7 +5,7 @@
 // A role assignment must be authored at the scope of its target resource, so it lives with the
 // resource, not with the principal — this is the seam where the identity graph crosses RG lines.
 
-import { Roles, Tags } from '../types.bicep'
+import { ChatModel, Roles, Tags } from '../types.bicep'
 
 @description('Azure region for Foundry (co-located with the models/gpt-5-mini).')
 param location string
@@ -28,6 +28,9 @@ param apimPrincipalId string
 @description('Built-in role definition GUIDs, keyed by role name.')
 param roles Roles
 
+@description('Chat models to deploy — one Foundry deployment per entry (see main.bicep, the single source of truth).')
+param chatModels ChatModel[]
+
 @description('Resource ID of the central Log Analytics workspace (from rg-monitoring). Foundry + Search diagnostics flow here.')
 param logAnalyticsWorkspaceId string
 
@@ -46,19 +49,24 @@ resource foundry 'Microsoft.CognitiveServices/accounts@2024-10-01' = {
   }
 }
 
-resource chatDeployment 'Microsoft.CognitiveServices/accounts/deployments@2024-10-01' = {
+// One deployment per picker model (main.bicep's chatModels). @batchSize(1) creates them serially —
+// Cognitive Services rejects parallel deployment writes on an account. The deployment name IS the
+// model name the app sends as the request body `model`, which is what APIM routes on: add a model in
+// main.bicep and it's reachable through the unchanged gateway.
+@batchSize(1)
+resource chatDeployments 'Microsoft.CognitiveServices/accounts/deployments@2024-10-01' = [for m in chatModels: {
   parent: foundry
-  name: 'gpt-5-mini'
+  name: m.name
   sku: { name: 'GlobalStandard', capacity: 10 }
   properties: {
-    model: { format: 'OpenAI', name: 'gpt-5-mini', version: '2025-08-07' }
+    model: { format: 'OpenAI', name: m.name, version: m.version }
   }
-}
+}]
 
 resource embedDeployment 'Microsoft.CognitiveServices/accounts/deployments@2024-10-01' = {
   parent: foundry
   name: 'text-embedding-3-large'
-  dependsOn: [chatDeployment] // deployments create serially
+  dependsOn: [chatDeployments] // after all chat deployments — deployments create serially
   sku: { name: 'Standard', capacity: 10 }
   properties: {
     model: { format: 'OpenAI', name: 'text-embedding-3-large', version: '1' }

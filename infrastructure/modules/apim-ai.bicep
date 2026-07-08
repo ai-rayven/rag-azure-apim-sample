@@ -45,7 +45,7 @@ resource diagnostic 'Microsoft.ApiManagement/service/diagnostics@2024-06-01-prev
 resource beFoundry 'Microsoft.ApiManagement/service/backends@2024-06-01-preview' = {
   parent: apim
   name: 'foundry'
-  properties: { protocol: 'http', url: '${foundryEndpoint}openai' }
+  properties: { protocol: 'http', url: '${foundryEndpoint}openai/v1' }
 }
 
 // ---------- API + operations (OpenAI-shaped) ----------
@@ -80,29 +80,14 @@ resource opEmbed 'Microsoft.ApiManagement/service/apis/operations@2024-06-01-pre
   }
 }
 
-// ---------- Routing policy (API-level). Foundry-only: MI auth, model name -> deployment path. ----------
-// The request's `model` field names the Foundry deployment; the URI is rewritten to the Azure
-// OpenAI shape and authenticated with APIM's managed identity (no key). Re-add a <choose> here to
-// fan out to third-party providers by model-name prefix.
-// buffer-response=false relays SSE chunks to the client as they arrive so token streaming (stream:true)
-// isn't held back until the whole completion is ready; when streaming is off we inherit the default
-// buffered backend. `{BACKEND}` is substituted below (multi-line strings don't support interpolation).
+// ---------- Routing policy (API-level). MI auth; the body's `model` field picks the model. ----------
 var backendPolicy = enableStreaming ? '<forward-request buffer-response="false" />' : '<base />'
 
 var policyTemplate = '''
 <policies>
   <inbound>
     <base />
-    <set-variable name="model" value="@{
-        var body = context.Request.Body?.As<JObject>(preserveContent: true);
-        return body?["model"]?.ToString() ?? "";
-    }" />
     <set-backend-service backend-id="foundry" />
-    <rewrite-uri template="@{
-        var model = (string)context.Variables["model"];
-        var op = context.Operation.Id == "embeddings" ? "embeddings" : "chat/completions";
-        return "/deployments/" + model + "/" + op + "?api-version=2024-10-21";
-    }" />
     <authentication-managed-identity resource="https://cognitiveservices.azure.com" />
   </inbound>
   <backend>{BACKEND}</backend>

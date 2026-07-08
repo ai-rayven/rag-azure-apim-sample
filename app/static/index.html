@@ -20,7 +20,20 @@
     display: flex; justify-content: space-between; align-items: center;
   }
   header h1 { font-size: 15px; font-weight: 650; }
+  header .right { display: flex; align-items: center; gap: 12px; }
   header .session { font-family: Consolas, monospace; font-size: 11px; color: var(--slate); }
+  /* Model picker — same APIM route/key for every option; the choice is just the request body's `model`. */
+  header .model {
+    display: flex; align-items: center; gap: 6px;
+    font-size: 11px; color: var(--slate);
+  }
+  header .model select {
+    font-family: Consolas, monospace; font-size: 11px; color: var(--ink);
+    padding: 4px 8px; border: 1px solid var(--line); border-radius: 6px;
+    background: var(--card); cursor: pointer; outline: none;
+  }
+  header .model select:focus { border-color: var(--accent); }
+  .meta .model { color: var(--accent); }
   #messages { flex: 1; overflow-y: auto; padding: 20px; max-width: 780px; width: 100%; margin: 0 auto; }
   .msg { margin-bottom: 14px; max-width: 85%; }
   .msg.user { margin-left: auto; }
@@ -57,7 +70,10 @@
 <body>
   <header>
     <h1>Product Support Assistant</h1>
-    <span class="session" id="session"></span>
+    <div class="right">
+      <label class="model">model <select id="model"></select></label>
+      <span class="session" id="session"></span>
+    </div>
   </header>
 
   <div id="messages"></div>
@@ -75,6 +91,22 @@
   const form = document.getElementById("form");
   const input = document.getElementById("input");
   const send = document.getElementById("send");
+  const modelPicker = document.getElementById("model");
+
+  // Populate the picker from the server so the dropdown always matches the deployed models. Every
+  // option travels the same APIM route + subscription key — switching models is purely the `model`
+  // field in the request body, which is what the gateway routes on.
+  fetch("/models")
+    .then((r) => r.json())
+    .then(({ models, default: def }) => {
+      for (const m of models) {
+        const o = document.createElement("option");
+        o.value = o.textContent = m;
+        if (m === def) o.selected = true;
+        modelPicker.appendChild(o);
+      }
+    })
+    .catch(() => { /* leave the picker empty; the server falls back to its default model */ });
 
   // Returns the bubble + meta elements so the caller can stream text into them and fill meta at the end.
   function add(role, text) {
@@ -104,7 +136,7 @@
       const r = await fetch("/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: q, session_id: sessionId }),
+        body: JSON.stringify({ message: q, session_id: sessionId, model: modelPicker.value || undefined }),
       });
       if (!r.ok) throw new Error("HTTP " + r.status);
 
@@ -115,7 +147,7 @@
         document.getElementById("session").textContent = "session " + sessionId.slice(0, 8);
         bubble.textContent = data.answer;
         meta.innerHTML =
-          `<span class="sources">sources: ${data.sources.join(", ") || "none"}</span><br>trace_id: ${data.trace_id}`;
+          `<span class="model">${data.model}</span> · <span class="sources">sources: ${data.sources.join(", ") || "none"}</span><br>trace_id: ${data.trace_id}`;
         return;
       }
 
@@ -142,7 +174,7 @@
             document.getElementById("session").textContent = "session " + sessionId.slice(0, 8);
             // trace_id shown on purpose: the demo is "copy this, find the same trace in App Insights".
             meta.innerHTML =
-              `<span class="sources">sources: ${payload.sources.join(", ") || "none"}</span><br>trace_id: ${payload.trace_id}`;
+              `<span class="model">${payload.model}</span> · <span class="sources">sources: ${payload.sources.join(", ") || "none"}</span><br>trace_id: ${payload.trace_id}`;
           } else if (event === "token") {
             bubble.textContent += payload;
             messages.scrollTop = messages.scrollHeight;

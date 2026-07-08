@@ -21,7 +21,10 @@ class Settings(BaseSettings):
     cosmos_db: str = "ragchat"
 
     embed_model: str = "text-embedding-3-large"
-    chat_model: str = "gpt-5-mini"
+    # Picker options (CSV of Foundry deployment names), provisioned + injected by azd from main.bicep's
+    # single-source `chatModels` list. No default: the deployed models are the source of truth. The
+    # gateway routes on the request body's `model`, so every name here works over the one APIM route.
+    chat_models: str
 
     applicationinsights_connection_string: str | None = None
 
@@ -32,6 +35,25 @@ class Settings(BaseSettings):
     def _strip_trailing_slash(cls, v: str) -> str:
         """Normalize the endpoint so URL joins don't produce a double slash."""
         return v.rstrip("/")
+
+    @property
+    def chat_model_options(self) -> list[str]:
+        """The picker's allowlist: CHAT_MODELS split into a de-duplicated, order-preserving list.
+
+        Server-side allowlist for the requested model — the name flows to the gateway as the body's
+        `model`, so we never forward an arbitrary client string.
+        """
+        seen: dict[str, None] = {}
+        for n in self.chat_models.split(","):
+            n = n.strip()
+            if n:
+                seen.setdefault(n, None)
+        return list(seen)
+
+    @property
+    def default_chat_model(self) -> str:
+        """The default selection: the first picker option (main.bicep's chatModels[0])."""
+        return self.chat_model_options[0]
 
 
 settings = Settings()

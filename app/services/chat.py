@@ -18,25 +18,30 @@ class ChatService:
         )
         self.system_prompt = (Path(__file__).parent.parent / "prompts" / "system.md").read_text(encoding="utf-8").strip()
 
-    def respond(self, session_id: str, message: str, hits: list[Hit], trace_id: str) -> Completion:
+    def respond(self, session_id: str, message: str, hits: list[Hit], trace_id: str, model: str) -> Completion:
         """Non-streaming turn: one blocking call, the whole answer at once.
+
+        `model` is the picker selection (already allowlist-validated by the caller); it becomes the
+        request body's `model`, which is what the APIM gateway routes on.
 
         Used when ENABLE_STREAMING is off (the APIM gateway is then on a tier that can't hold the
         long-lived SSE connection, so we must NOT send stream=true upstream).
         """
         messages = self._prepare(session_id, message, hits)
-        resp = self._client.chat.completions.create(model=settings.chat_model, messages=messages)
+        resp = self._client.chat.completions.create(model=model, messages=messages)
         completion = Completion(
             answer=resp.choices[0].message.content,
-            model=settings.chat_model,
+            model=model,
             input_tokens=resp.usage.prompt_tokens,
             output_tokens=resp.usage.completion_tokens,
         )
         self._finish(session_id, message, trace_id, completion)
         return completion
 
-    def respond_stream(self, session_id: str, message: str, hits: list[Hit], trace_id: str) -> Iterator[str]:
+    def respond_stream(self, session_id: str, message: str, hits: list[Hit], trace_id: str, model: str) -> Iterator[str]:
         """Streaming turn: yield each content delta as it arrives.
+
+        `model` is the allowlist-validated picker selection (see `respond`).
 
         The generator's *return value* (captured via `StopIteration.value`) is the finished
         `Completion` — full answer plus token usage from the stream's final chunk. Persistence runs
@@ -45,7 +50,7 @@ class ChatService:
         messages = self._prepare(session_id, message, hits)
 
         stream = self._client.chat.completions.create(
-            model=settings.chat_model,
+            model=model,
             messages=messages,
             stream=True,
             stream_options={"include_usage": True},
@@ -63,7 +68,7 @@ class ChatService:
 
         completion = Completion(
             answer="".join(parts),
-            model=settings.chat_model,
+            model=model,
             input_tokens=usage.prompt_tokens if usage else 0,
             output_tokens=usage.completion_tokens if usage else 0,
         )

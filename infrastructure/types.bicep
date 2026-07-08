@@ -17,3 +17,10 @@ type Roles = {
 type Tags = {
   workload: string
 }
+
+@export()
+@description('A chat model offered in the app picker: a Foundry deployment name + the pinned model version. Single source of truth (main.bicep) threaded to `ai` (creates one deployment per entry) and `app` (derives the CHAT_MODELS env var). The deployment name is what the app sends as the request body `model` — which is exactly what APIM routes on — so adding an entry needs no gateway change.')
+type ChatModel = {
+  name: string
+  version: string
+}
